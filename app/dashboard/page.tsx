@@ -5,7 +5,7 @@ import Link from "next/link";
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   
-  if (!user.isOnboarded) {
+  if (!user || !user.isOnboarded) {
     return null; // Should be redirected by layout
   }
   
@@ -117,7 +117,7 @@ export default async function DashboardPage() {
                       {call.title || "Untitled Call"}
                     </p>
                     <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                      {call.reps?.name || "Unknown"} • {call.occurred_at ? new Date(call.occurred_at).toLocaleDateString() : "Unknown date"}
+                      {call.reps?.[0]?.name || "Unknown"} • {call.occurred_at ? new Date(call.occurred_at).toLocaleDateString() : "Unknown date"}
                     </p>
                   </div>
                 </div>

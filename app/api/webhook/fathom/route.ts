@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import { createHash } from "crypto";
+import { createHash, timingSafeEqual, randomUUID } from "crypto";
+
+// Force Node.js runtime for crypto support
+export const runtime = "nodejs";
 
 // Fathom webhook payload type (defensive - many fields optional)
 interface FathomWebhookPayload {
@@ -69,7 +72,7 @@ function verifySignature(payload: string, signature: string | null): boolean {
   
   // Timing-safe comparison
   try {
-    return crypto.timingSafeEqual(
+    return timingSafeEqual(
       Buffer.from(signature),
       Buffer.from(expectedSignature)
     );
@@ -79,7 +82,7 @@ function verifySignature(payload: string, signature: string | null): boolean {
 }
 
 export async function POST(request: NextRequest) {
-  const requestId = crypto.randomUUID();
+  const requestId = randomUUID();
   const timestamp = new Date().toISOString();
   
   console.log(`[WEBHOOK ${requestId}] Received POST request at ${timestamp}`);

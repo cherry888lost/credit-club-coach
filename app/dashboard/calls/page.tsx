@@ -1,12 +1,12 @@
 import { getCurrentUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import { CallWithScore } from "@/types";
+import { CallWithScoreAndRep } from "@/types";
 import Link from "next/link";
 
 export default async function CallsPage() {
   const user = await getCurrentUser();
   
-  if (!user.isOnboarded) {
+  if (!user || !user.isOnboarded) {
     return null;
   }
   
@@ -25,7 +25,7 @@ export default async function CallsPage() {
   }
   
   // Calculate average score for each call
-  const callsWithAvgScore = (calls || []).map((call: CallWithScore) => {
+  const callsWithAvgScore = (calls || []).map((call: CallWithScoreAndRep) => {
     const scores = call.call_scores;
     let avgScore = null;
     
@@ -96,7 +96,7 @@ export default async function CallsPage() {
                     {call.title || "Untitled Call"}
                   </p>
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                    {call.reps?.name || "Unknown"}
+                    {call.reps?.[0]?.name || "Unknown"}
                     {" "}•{" "}
                     {call.occurred_at 
                       ? new Date(call.occurred_at).toLocaleDateString("en-US", {

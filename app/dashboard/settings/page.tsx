@@ -4,7 +4,7 @@ import WebhookHealth from "./_components/WebhookHealth";
 export default async function SettingsPage() {
   const user = await getCurrentUser();
   
-  if (!user.isOnboarded) {
+  if (!user || !user.isOnboarded) {
     return null;
   }
   

@@ -4,12 +4,16 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { RefreshCw, Send, CheckCircle, AlertCircle, Webhook } from "lucide-react";
 
+interface Rep {
+  name: string;
+}
+
 interface Call {
   id: string;
   fathom_call_id: string | null;
   title: string | null;
   created_at: string;
-  reps: { name: string } | null;
+  reps: Rep[] | null;
 }
 
 export default function WebhookHealth() {
@@ -41,7 +45,7 @@ export default function WebhookHealth() {
         .limit(10);
       
       if (error) throw error;
-      setCalls(data || []);
+      setCalls((data || []) as Call[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch calls");
     } finally {
@@ -231,7 +235,7 @@ export default function WebhookHealth() {
                     {call.title || "Untitled"}
                   </p>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                    {call.reps?.name || "Unknown"} • {new Date(call.created_at).toLocaleString()}
+                    {call.reps?.[0]?.name || "Unknown"} • {new Date(call.created_at).toLocaleString()}
                   </p>
                 </div>                
                 {call.fathom_call_id && (

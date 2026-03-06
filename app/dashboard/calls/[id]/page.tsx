@@ -14,7 +14,7 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
   const { id } = await params;
   const user = await getCurrentUser();
   
-  if (!user.isOnboarded) {
+  if (!user || !user.isOnboarded) {
     return null;
   }
   
@@ -65,7 +65,7 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
             {call.title || "Untitled Call"}
           </h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            {call.reps?.name || "Unknown"}
+            {call.reps?.[0]?.name || "Unknown"}
             {" "}•{" "}
             {call.occurred_at 
               ? new Date(call.occurred_at).toLocaleString()

@@ -67,6 +67,10 @@ export interface CallWithScore extends Call {
   call_scores?: CallScore | null;
 }
 
+export interface CallWithScoreAndRep extends CallWithScore {
+  reps?: { name: string }[] | null;
+}
+
 export interface RepWithCalls extends Rep {
   calls?: Call[];
 }

@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 export default async function AnalysisPage() {
   const user = await getCurrentUser();
   
-  if (!user.isOnboarded) {
+  if (!user || !user.isOnboarded) {
     return null;
   }
   

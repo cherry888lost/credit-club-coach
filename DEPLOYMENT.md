@@ -32,7 +32,7 @@ Add these in Vercel Dashboard → Project Settings → Environment Variables:
 |----------|-------|--------|
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | `pk_live_...` | Clerk Dashboard → API Keys |
 | `CLERK_SECRET_KEY` | `sk_live_...` | Clerk Dashboard → API Keys |
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://...` | Supabase Dashboard → Project Settings → API |
+| `NEXT_PUBLIC_SUPABASE_PROJECT_URL` | `https://...` | Supabase Dashboard → Project Settings → API |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `eyJ...` | Supabase Dashboard → Project Settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` | Supabase Dashboard → Project Settings → API (service_role) |
 | `FATHOM_WEBHOOK_SECRET` | `whsec_...` | Generate with `openssl rand -hex 32` |

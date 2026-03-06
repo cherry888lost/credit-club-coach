@@ -6,7 +6,7 @@ import AddRepButton from "./_components/AddRepButton";
 export default async function RepsPage() {
   const user = await getCurrentUser();
   
-  if (!user.isOnboarded) {
+  if (!user || !user.isOnboarded) {
     return null;
   }
   
