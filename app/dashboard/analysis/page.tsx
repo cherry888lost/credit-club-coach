@@ -1,5 +1,6 @@
 import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { BarChart3, TrendingUp, Award } from "lucide-react";
 
 export default async function AnalysisPage() {
   const user = await getCurrentUser();
@@ -87,6 +88,8 @@ export default async function AnalysisPage() {
     { name: "Product Knowledge", score: avgScores.product_knowledge },
   ];
   
+  const hasData = allScores.length > 0;
+  
   return (
     <div className="space-y-6">
       <div>
@@ -94,99 +97,125 @@ export default async function AnalysisPage() {
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">AI-powered insights and call scoring</p>
       </div>
       
-      {overallAvg !== null && (
-        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-          <div className="flex items-center gap-6">
-            <div className="text-center">
-              <span className={`text-5xl font-bold ${overallAvg >= 8 ? "text-green-600 dark:text-green-400" : overallAvg >= 6 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}`}>{overallAvg.toFixed(1)}</span>
-              <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">Team Average</p>
+      {!hasData ? (
+        <EmptyState 
+          icon={<BarChart3 className="w-12 h-12" />}
+          title="No scored calls yet"
+          description="Analysis appears here once calls are scored. Connect Fathom to start importing calls, then AI scoring will analyze them automatically."
+        />
+      ) : (
+        <>
+          {overallAvg !== null && (
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+              <div className="flex items-center gap-6">
+                <div className="text-center">
+                  <span className={`text-5xl font-bold ${overallAvg >= 8 ? "text-green-600 dark:text-green-400" : overallAvg >= 6 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}`}>{overallAvg.toFixed(1)}</span>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">Team Average</p>
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400">Based on {allScores.length} scored calls across {Object.keys(repScores).length} reps</p>
+                </div>
+              </div>
             </div>
-            <div className="flex-1">
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">Based on {allScores.length} scored calls across {Object.keys(repScores).length} reps</p>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <TrendingUp className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                <h3 className="text-lg font-medium text-zinc-900 dark:text-white">Score Breakdown</h3>
+              </div>
+              <div className="space-y-4">
+                {scoreCategories.map((category) => (
+                  <div key={category.name}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm text-zinc-600 dark:text-zinc-400">{category.name}</span>
+                      <span className="text-sm font-medium text-zinc-900 dark:text-white">{category.score?.toFixed(1) || "-"}</span>
+                    </div>
+                    <div className="w-full h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+                      <div className="h-full bg-indigo-600 rounded-full transition-all" style={{ width: category.score ? `${(category.score / 10) * 100}%` : "0%" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+                <h3 className="text-lg font-medium text-green-600 dark:text-green-400 mb-4">Top Strengths</h3>
+                {topStrengths.length > 0 ? (
+                  <ul className="space-y-2">
+                    {topStrengths.map(([strength, count]) => (
+                      <li key={strength} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-center justify-between">
+                        <span>{strength}</span>
+                        <span className="text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">{count} calls</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-zinc-500 dark:text-zinc-400 text-sm">No strengths data yet</p>
+                )}
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+                <h3 className="text-lg font-medium text-amber-600 dark:text-amber-400 mb-4">Common Improvements</h3>
+                {topImprovements.length > 0 ? (
+                  <ul className="space-y-2">
+                    {topImprovements.map(([improvement, count]) => (
+                      <li key={improvement} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-center justify-between">
+                        <span>{improvement}</span>
+                        <span className="text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">{count} calls</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-zinc-500 dark:text-zinc-400 text-sm">No improvement data yet</p>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800">
+            <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
+              <Award className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
+              <h2 className="text-lg font-medium text-zinc-900 dark:text-white">Rep Leaderboard</h2>
+            </div>
+            
+            {leaderboard.length > 0 ? (
+              <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                {leaderboard.map((rep, index) => (
+                  <div key={rep.name} className="flex items-center justify-between p-4">
+                    <div className="flex items-center gap-4">
+                      <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${index === 0 ? "bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400" : index === 1 ? "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400" : index === 2 ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500"}`}>{index + 1}</span>
+                      <span className="font-medium text-zinc-900 dark:text-white">{rep.name}</span>
+                    </div>
+                    <div className="flex items-center gap-6">
+                      <span className="text-sm text-zinc-500 dark:text-zinc-400">{rep.count} calls</span>
+                      <span className={`text-lg font-semibold w-16 text-right ${rep.avgScore >= 8 ? "text-green-600 dark:text-green-400" : rep.avgScore >= 6 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}`}>{rep.avgScore.toFixed(1)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-12 text-center text-zinc-500 dark:text-zinc-400">
+                No leaderboard data yet
+              </div>
+            )}
+          </div>
+        </>
       )}
+    </div>
+  );
+}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-          <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Score Breakdown</h3>
-          <div className="space-y-4">
-            {scoreCategories.map((category) => (
-              <div key={category.name}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">{category.name}</span>
-                  <span className="text-sm font-medium text-zinc-900 dark:text-white">{category.score?.toFixed(1) || "-"}</span>
-                </div>
-                <div className="w-full h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-                  <div className="h-full bg-indigo-600 rounded-full transition-all" style={{ width: category.score ? `${(category.score / 10) * 100}%` : "0%" }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-6">
-          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-            <h3 className="text-lg font-medium text-green-600 dark:text-green-400 mb-4">Top Strengths</h3>
-            {topStrengths.length > 0 ? (
-              <ul className="space-y-2">
-                {topStrengths.map(([strength, count]) => (
-                  <li key={strength} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-center justify-between">
-                    <span>{strength}</span>
-                    <span className="text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">{count} calls</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-zinc-500 dark:text-zinc-400 text-sm">No strengths data yet</p>
-            )}
-          </div>
-
-          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-            <h3 className="text-lg font-medium text-amber-600 dark:text-amber-400 mb-4">Common Improvements</h3>
-            {topImprovements.length > 0 ? (
-              <ul className="space-y-2">
-                {topImprovements.map(([improvement, count]) => (
-                  <li key={improvement} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-center justify-between">
-                    <span>{improvement}</span>
-                    <span className="text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">{count} calls</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-zinc-500 dark:text-zinc-400 text-sm">No improvement data yet</p>
-            )}
-          </div>
-        </div>
+function EmptyState({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+  return (
+    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-12 text-center">
+      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
+        {icon}
       </div>
-
-      <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800">
-        <div className="p-6 border-b border-zinc-200 dark:border-zinc-800">
-          <h2 className="text-lg font-medium text-zinc-900 dark:text-white">Rep Leaderboard</h2>
-        </div>
-        
-        {leaderboard.length > 0 ? (
-          <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-            {leaderboard.map((rep, index) => (
-              <div key={rep.name} className="flex items-center justify-between p-4">
-                <div className="flex items-center gap-4">
-                  <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${index === 0 ? "bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400" : index === 1 ? "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400" : index === 2 ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500"}`}>{index + 1}</span>
-                  <span className="font-medium text-zinc-900 dark:text-white">{rep.name}</span>
-                </div>
-                <div className="flex items-center gap-6">
-                  <span className="text-sm text-zinc-500 dark:text-zinc-400">{rep.count} calls</span>
-                  <span className={`text-lg font-semibold w-16 text-right ${rep.avgScore >= 8 ? "text-green-600 dark:text-green-400" : rep.avgScore >= 6 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}`}>{rep.avgScore.toFixed(1)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="p-12 text-center">
-            <p className="text-zinc-500 dark:text-zinc-400">Leaderboard will populate once calls are scored.</p>
-          </div>
-        )}
-      </div>
+      <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">{title}</h3>
+      <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">{description}</p>
     </div>
   );
 }

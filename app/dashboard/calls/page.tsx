@@ -2,6 +2,7 @@ import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { CallWithScoreAndRep } from "@/types";
 import Link from "next/link";
+import { Phone, Plus } from "lucide-react";
 
 export default async function CallsPage() {
   const user = await getCurrentUser();
@@ -50,11 +51,13 @@ export default async function CallsPage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <div className="px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-600 dark:text-zinc-400">Filter by Rep</div>
-        <div className="px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-600 dark:text-zinc-400">Date Range</div>
-        <div className="px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-600 dark:text-zinc-400">Score Range</div>
-      </div>
+      {callsWithAvgScore.length > 0 && (
+        <div className="flex flex-wrap gap-3">
+          <div className="px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-600 dark:text-zinc-400">Filter by Rep</div>
+          <div className="px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-600 dark:text-zinc-400">Date Range</div>
+          <div className="px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-600 dark:text-zinc-400">Score Range</div>
+        </div>
+      )}
 
       <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800">
         <div className="p-6 border-b border-zinc-200 dark:border-zinc-800">
@@ -87,11 +90,32 @@ export default async function CallsPage() {
             ))}
           </div>
         ) : (
-          <div className="p-12 text-center">
-            <p className="text-zinc-500 dark:text-zinc-400">No calls yet. Calls will appear here once Fathom integration is connected.</p>
-          </div>
+          <EmptyState 
+            icon={<Phone className="w-12 h-12" />}
+            title="No calls found yet"
+            description="Calls appear here automatically when Fathom sends webhooks. You can also send a test webhook from Settings."
+            action={
+              <Link href="/dashboard/settings" className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors">
+                <Plus className="w-4 h-4" />
+                Send Test Webhook
+              </Link>
+            }
+          />
         )}
       </div>
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, description, action }: { icon: React.ReactNode; title: string; description: string; action?: React.ReactNode }) {
+  return (
+    <div className="p-12 text-center">
+      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
+        {icon}
+      </div>
+      <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">{title}</h3>
+      <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto mb-6">{description}</p>
+      {action}
     </div>
   );
 }
