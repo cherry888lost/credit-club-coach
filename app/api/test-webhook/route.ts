@@ -40,6 +40,7 @@ export async function POST(request: NextRequest) {
     const demoIndex = (callCount || 0) % DEMO_NAMES.length;
     const customerName = DEMO_NAMES[demoIndex];
     const repName = DEMO_REPS[demoIndex % DEMO_REPS.length];
+    const repEmail = repName.toLowerCase().replace(/\s+/g, '.') + "@creditclub.com";
     
     // Find or create demo rep
     let repId: string | null = null;
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
         .insert({
           org_id: DEFAULT_ORG_ID,
           clerk_user_id: `demo_${repName.toLowerCase().replace(/\s+/g, '_')}`,
-          email: `${repName.toLowerCase().replace(/\s+/g, '.')}@creditclub.com`,
+          email: repEmail,
           name: repName,
           role: repName.includes("Manager") ? "manager" : "closer",
           status: "active",
@@ -81,116 +82,77 @@ export async function POST(request: NextRequest) {
     
     const avgScore = Math.round((Object.values(scores).reduce((a, b) => a + b, 0) / 7) * 10) / 10;
     
-    // Create call
-    const callPayload = {
-      id: `demo_call_${Date.now()}`,
-      title: `${customerName} - Discovery Call`,
-      started_at: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString(), // Within last week
-      transcript: DEMO_TRANSCRIPTS[demoIndex % DEMO_TRANSCRIPTS.length],
-      recording_url: "https://example.com/demo-recording.mp4",
-      host: {
-        email: repName.toLowerCase().replace(/\s+/g, '.') + "@creditclub.com",
-        name: repName
-      },
-      metadata: {
-        source: "demo_webhook",
-        customer_name: customerName,
-        demo_index: demoIndex,
-      }
-    };
+    // Create the call directly (bypass webhook for demo data)
+    const { data: newCall, error: callError } = await serviceSupabase
+      .from("calls")
+      .insert({
+        org_id: DEFAULT_ORG_ID,
+        rep_id: repId,
+        fathom_call_id: `demo_call_${Date.now()}`,
+        title: `${customerName} - Discovery Call`,
+        occurred_at: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString(),
+        transcript: DEMO_TRANSCRIPTS[demoIndex % DEMO_TRANSCRIPTS.length],
+        recording_url: "https://example.com/demo-recording.mp4",
+        metadata: {
+          source: "demo_webhook",
+          customer_name: customerName,
+          demo_index: demoIndex,
+        },
+      })
+      .select()
+      .single();
     
-    // Generate signature
-    const secret = process.env.FATHOM_WEBHOOK_SECRET;
-    if (!secret) {
-      return NextResponse.json(
-        { error: "FATHOM_WEBHOOK_SECRET not configured" },
-        { status: 500 }
-      );
-    }
-    
-    const payloadString = JSON.stringify(callPayload);
-    const signature = createHash("sha256").update(payloadString + secret).digest("hex");
-    
-    // Send to webhook
-    const host = request.headers.get("host") || "localhost:3000";
-    const protocol = host.includes("localhost") ? "http" : "https";
-    const webhookUrl = `${protocol}://${host}/api/webhook/fathom`;
-    
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Fathom-Signature": signature,
-      },
-      body: payloadString,
-    });
-    
-    const result = await response.json();
-    
-    if (!response.ok) {
+    if (callError || !newCall) {
+      console.error("Failed to create demo call:", callError);
       return NextResponse.json({
         success: false,
-        status: response.status,
-        result,
-      });
+        error: callError?.message || "Failed to create call",
+      }, { status: 500 });
     }
     
-    // Now update the call with demo scores
-    if (result.callId) {
-      const strengths = DEMO_STRENGTHS[demoIndex % DEMO_STRENGTHS.length];
-      const improvements = DEMO_IMPROVEMENTS[demoIndex % DEMO_IMPROVEMENTS.length];
-      
-      const { error: scoreError } = await serviceSupabase
-        .from("call_scores")
-        .update({
-          opening_score: scores.opening,
-          discovery_score: scores.discovery,
-          rapport_score: scores.rapport,
-          objection_handling_score: scores.objection_handling,
-          closing_score: scores.closing,
-          structure_score: scores.structure,
-          product_knowledge_score: scores.product_knowledge,
-          ai_summary: `Good discovery call with ${customerName}. Rep demonstrated solid product knowledge and built rapport effectively. Overall score: ${avgScore}/10.`,
-          strengths: JSON.stringify(strengths),
-          improvements: JSON.stringify(improvements),
-        })
-        .eq("call_id", result.callId);
-      
-      if (scoreError) {
-        console.error("Failed to update scores:", scoreError);
-      }
-      
-      // Update call with rep_id if found
-      if (repId) {
-        await serviceSupabase
-          .from("calls")
-          .update({ rep_id: repId })
-          .eq("id", result.callId);
-      }
-      
-      // Maybe flag low-scoring calls
-      if (avgScore < 7) {
-        await serviceSupabase.from("flags").insert({
-          org_id: DEFAULT_ORG_ID,
-          call_id: result.callId,
-          type: "coaching_needed",
-          note: `Low score (${avgScore}/10). Review ${improvements.join(", ")}.`,
-        });
-      }
+    // Create call scores
+    const strengths = DEMO_STRENGTHS[demoIndex % DEMO_STRENGTHS.length];
+    const improvements = DEMO_IMPROVEMENTS[demoIndex % DEMO_IMPROVEMENTS.length];
+    
+    const { error: scoreError } = await serviceSupabase
+      .from("call_scores")
+      .insert({
+        call_id: newCall.id,
+        opening_score: scores.opening,
+        discovery_score: scores.discovery,
+        rapport_score: scores.rapport,
+        objection_handling_score: scores.objection_handling,
+        closing_score: scores.closing,
+        structure_score: scores.structure,
+        product_knowledge_score: scores.product_knowledge,
+        ai_summary: `Good discovery call with ${customerName}. Rep demonstrated solid product knowledge and built rapport effectively. Overall score: ${avgScore}/10.`,
+        strengths: JSON.stringify(strengths),
+        improvements: JSON.stringify(improvements),
+      });
+    
+    if (scoreError) {
+      console.error("Failed to create scores:", scoreError);
+    }
+    
+    // Flag low-scoring calls
+    if (avgScore < 7) {
+      await serviceSupabase.from("flags").insert({
+        org_id: DEFAULT_ORG_ID,
+        call_id: newCall.id,
+        type: "coaching_needed",
+        note: `Low score (${avgScore}/10). Review ${improvements.join(", ")}.`,
+      });
     }
     
     return NextResponse.json({
       success: true,
-      status: response.status,
-      result: {
-        ...result,
-        demoData: {
-          customerName,
-          repName,
-          avgScore,
-          scores,
-        }
-      },
+      callId: newCall.id,
+      demoData: {
+        customerName,
+        repName,
+        avgScore,
+        scores,
+      }
     });
     
   } catch (error) {
