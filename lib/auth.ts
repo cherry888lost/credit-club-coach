@@ -3,68 +3,18 @@ import { createClient } from "./supabase/server";
 import type { Rep } from "@/types";
 
 // Fixed internal workspace for single-tenant setup
-const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
-const DEFAULT_ORG_SLUG = "credit-club-internal";
-const DEFAULT_ORG_NAME = "Credit Club Team";
-
-/**
- * Get or create the default organization for single-tenant mode.
- * This ensures we have a consistent org record without requiring onboarding.
- */
-async function getOrCreateDefaultOrg() {
-  const supabase = await createClient();
-  
-  // Try to get existing org
-  const { data: org, error: fetchError } = await supabase
-    .from("organizations")
-    .select("*")
-    .eq("id", DEFAULT_ORG_ID)
-    .single();
-  
-  if (org) {
-    return org;
-  }
-  
-  if (fetchError && fetchError.code !== "PGRST116") {
-    // PGRST116 = no rows returned, which is expected if org doesn't exist
-    console.error("[getOrCreateDefaultOrg] Fetch error:", fetchError);
-  }
-  
-  // Create default org if not exists
-  const { data: newOrg, error: insertError } = await supabase
-    .from("organizations")
-    .insert({
-      id: DEFAULT_ORG_ID,
-      name: DEFAULT_ORG_NAME,
-      slug: DEFAULT_ORG_SLUG,
-      settings: {},
-    })
-    .select()
-    .single();
-  
-  if (insertError) {
-    // If unique violation, org was created by another request - fetch it
-    if (insertError.code === "23505") {
-      const { data: existingOrg } = await supabase
-        .from("organizations")
-        .select("*")
-        .eq("id", DEFAULT_ORG_ID)
-        .single();
-      if (existingOrg) return existingOrg;
-    }
-    console.error("[getOrCreateDefaultOrg] Insert error:", insertError);
-    throw new Error("Failed to initialize workspace: " + insertError.message);
-  }
-  
-  return newOrg;
-}
+// This org must already exist in the database
+export const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
 /**
  * Get or create a rep record for the current Clerk user.
  * Auto-creates rep on first sign-in with default role.
+ * Does NOT create organization - uses fixed org ID.
  */
-async function getOrCreateRep(userId: string, email: string, name: string): Promise<Rep> {
+async function getOrCreateRep(userId: string, email: string, name: string): Promise<Rep | null> {
   const supabase = await createClient();
+  
+  console.log(`[getOrCreateRep] Checking for existing rep: clerk_user_id=${userId}`);
   
   // Check if rep already exists
   const { data: existingRep, error: fetchError } = await supabase
@@ -74,6 +24,7 @@ async function getOrCreateRep(userId: string, email: string, name: string): Prom
     .single();
   
   if (existingRep) {
+    console.log(`[getOrCreateRep] Found existing rep: ${existingRep.id}, role=${existingRep.role}`);
     return existingRep as Rep;
   }
   
@@ -81,8 +32,7 @@ async function getOrCreateRep(userId: string, email: string, name: string): Prom
     console.error("[getOrCreateRep] Fetch error:", fetchError);
   }
   
-  // Get or create default org
-  const org = await getOrCreateDefaultOrg();
+  console.log(`[getOrCreateRep] No existing rep found, creating new one`);
   
   // Check if this is the first user (no other reps exist)
   const { count: repCount, error: countError } = await supabase
@@ -96,13 +46,13 @@ async function getOrCreateRep(userId: string, email: string, name: string): Prom
   // First user becomes admin, others default to closer
   const role = repCount === 0 ? "admin" : "closer";
   
-  console.log(`[getOrCreateRep] Creating new rep: ${email} with role: ${role}`);
+  console.log(`[getOrCreateRep] Creating rep: email=${email}, role=${role}, org_id=${DEFAULT_ORG_ID}`);
   
-  // Create new rep
+  // Create new rep with fixed org ID (org must already exist)
   const { data: newRep, error: insertError } = await supabase
     .from("reps")
     .insert({
-      org_id: org.id,
+      org_id: DEFAULT_ORG_ID,
       clerk_user_id: userId,
       email,
       name,
@@ -115,15 +65,19 @@ async function getOrCreateRep(userId: string, email: string, name: string): Prom
   if (insertError) {
     // If unique violation, rep was created by another request - fetch it
     if (insertError.code === "23505") {
+      console.log("[getOrCreateRep] Race condition - rep already exists, fetching");
       const { data: raceRep } = await supabase
         .from("reps")
         .select("*")
         .eq("clerk_user_id", userId)
         .single();
-      if (raceRep) return raceRep as Rep;
+      if (raceRep) {
+        console.log(`[getOrCreateRep] Found rep after race: ${raceRep.id}`);
+        return raceRep as Rep;
+      }
     }
     console.error("[getOrCreateRep] Insert error:", insertError);
-    throw new Error("Failed to create user record: " + insertError.message);
+    return null;
   }
   
   console.log(`[getOrCreateRep] Created rep: ${newRep?.id}`);
@@ -133,7 +87,7 @@ async function getOrCreateRep(userId: string, email: string, name: string): Prom
 export async function getCurrentUser() {
   const { userId } = await auth();
   
-  console.log("[getCurrentUser] userId from Clerk:", userId);
+  console.log("[getCurrentUser] clerk userId:", userId);
   
   if (!userId) {
     console.log("[getCurrentUser] No userId, returning null");
@@ -152,31 +106,28 @@ export async function getCurrentUser() {
   
   console.log(`[getCurrentUser] Clerk user: ${primaryEmail}, ${fullName}`);
   
-  try {
-    // Auto-create rep if missing (no onboarding required)
-    const rep = await getOrCreateRep(userId, primaryEmail, fullName);
-    const org = await getOrCreateDefaultOrg();
-    
-    console.log("[getCurrentUser] Success - rep:", rep.id, "role:", rep.role);
-    
-    return {
-      userId,
-      rep,
-      org,
-      isOnboarded: true,
-    };
-  } catch (error) {
-    console.error("[getCurrentUser] Error creating rep:", error);
-    // Return user info even if rep creation fails - don't redirect to sign-in
-    // This prevents the redirect loop
+  // Auto-create rep if missing (no onboarding required)
+  const rep = await getOrCreateRep(userId, primaryEmail, fullName);
+  
+  if (!rep) {
+    console.error("[getCurrentUser] Failed to get or create rep");
     return {
       userId,
       rep: null,
-      org: null,
+      orgId: DEFAULT_ORG_ID,
       isOnboarded: false,
-      error: error instanceof Error ? error.message : "Unknown error",
+      error: "Failed to create user record. Please try again.",
     };
   }
+  
+  console.log("[getCurrentUser] Success - rep:", rep.id, "role:", rep.role);
+  
+  return {
+    userId,
+    rep,
+    orgId: DEFAULT_ORG_ID,
+    isOnboarded: true,
+  };
 }
 
 export async function requireAuth() {
@@ -194,8 +145,7 @@ export async function requireAuth() {
  * All data is scoped to this single organization.
  */
 export async function getDefaultOrgId(): Promise<string> {
-  const org = await getOrCreateDefaultOrg();
-  return org.id;
+  return DEFAULT_ORG_ID;
 }
 
 /**
