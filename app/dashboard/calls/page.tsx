@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { CallWithScoreAndRep } from "@/types";
 import Link from "next/link";
 import { Phone, Plus } from "lucide-react";
+import SendTestWebhookButton from "./_components/SendTestWebhookButton";
 
 export default async function CallsPage() {
   const user = await getCurrentUser();
@@ -21,8 +22,10 @@ export default async function CallsPage() {
     .order("occurred_at", { ascending: false });
   
   if (error) {
-    console.error("Error fetching calls:", error);
+    console.error("[CallsPage] Error fetching calls:", error);
   }
+  
+  console.log(`[CallsPage] Fetched ${calls?.length || 0} calls for org ${orgId}`);
   
   const callsWithAvgScore = (calls || []).map((call: CallWithScoreAndRep) => {
     const scores = call.call_scores;
@@ -49,6 +52,7 @@ export default async function CallsPage() {
           <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Calls</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">View and analyze all recorded calls</p>
         </div>
+        <SendTestWebhookButton />
       </div>
 
       {callsWithAvgScore.length > 0 && (
@@ -60,7 +64,7 @@ export default async function CallsPage() {
       )}
 
       <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800">
-        <div className="p-6 border-b border-zinc-200 dark:border-zinc-800">
+        <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
           <h2 className="text-lg font-medium text-zinc-900 dark:text-white">All Calls ({calls?.length || 0})</h2>
         </div>
         
@@ -93,13 +97,7 @@ export default async function CallsPage() {
           <EmptyState 
             icon={<Phone className="w-12 h-12" />}
             title="No calls found yet"
-            description="Calls appear here automatically when Fathom sends webhooks. You can also send a test webhook from Settings."
-            action={
-              <Link href="/dashboard/settings" className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors">
-                <Plus className="w-4 h-4" />
-                Send Test Webhook
-              </Link>
-            }
+            description="Calls appear here automatically when Fathom sends webhooks. Click the button above to send a test webhook."
           />
         )}
       </div>
@@ -107,15 +105,14 @@ export default async function CallsPage() {
   );
 }
 
-function EmptyState({ icon, title, description, action }: { icon: React.ReactNode; title: string; description: string; action?: React.ReactNode }) {
+function EmptyState({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
   return (
     <div className="p-12 text-center">
       <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
         {icon}
       </div>
       <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">{title}</h3>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto mb-6">{description}</p>
-      {action}
+      <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">{description}</p>
     </div>
   );
 }
