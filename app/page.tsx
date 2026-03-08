@@ -1,4 +1,15 @@
-export default function HomePage() {
+import { auth } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
+
+export default async function HomePage() {
+  const { userId } = await auth();
+  
+  // If user is signed in, go straight to dashboard
+  if (userId) {
+    redirect("/dashboard");
+  }
+  
+  // Otherwise show sign-in link
   return (
     <div style={{ padding: 40, fontFamily: 'system-ui' }}>
       <h1>Credit Club Coach</h1>
