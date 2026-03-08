@@ -61,7 +61,7 @@ export default function WebhookHealth() {
     return () => clearInterval(interval);
   }, []);
   
-  // Send test webhook
+  // Send test webhook via server-side API (has access to secret)
   const sendTestWebhook = async () => {
     setTestStatus("loading");
     setTestResult(null);
@@ -83,26 +83,19 @@ export default function WebhookHealth() {
         }
       };
       
-      // Generate signature
-      const secret = "dev-webhook-secret-12345"; // Match the env var
-      const encoder = new TextEncoder();
-      const data = encoder.encode(JSON.stringify(testPayload) + secret);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const signature = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      
-      const response = await fetch("/api/webhook/fathom", {
+      // Send to our test API which has access to the real secret
+      const response = await fetch("/api/test-webhook", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Fathom-Signature": signature,
         },
-        body: JSON.stringify(testPayload),
+        body: JSON.stringify({ payload: testPayload }),
       });
       
       const result = await response.json();
-      setTestResult({ status: response.status, ...result });
-      setTestStatus(response.ok ? "success" : "error");
+      
+      setTestResult(result);
+      setTestStatus(result.success ? "success" : "error");
       
       // Refresh calls list after a moment
       setTimeout(fetchRecentCalls, 1000);
