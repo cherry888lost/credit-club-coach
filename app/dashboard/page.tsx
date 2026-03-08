@@ -1,7 +1,9 @@
 import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { Phone, Users, Flag, BarChart3, Plus } from "lucide-react";
+
+export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const user = await getCurrentUser();
@@ -10,8 +12,21 @@ export default async function DashboardPage() {
     return null;
   }
   
-  const supabase = await createClient();
+  const serviceSupabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
+  
+  console.log(`[DashboardPage] org_id=${orgId}`);
+  
+  // Debug: raw count
+  const { count: rawCount } = await serviceSupabase
+    .from("calls")
+    .select("*", { count: "exact", head: true });
+  
+  // Debug: org-filtered count  
+  const { count: orgCount } = await serviceSupabase
+    .from("calls")
+    .select("*", { count: "exact", head: true })
+    .eq("org_id", orgId);
   
   // Fetch stats
   const [
@@ -20,10 +35,10 @@ export default async function DashboardPage() {
     { count: flaggedCount },
     { data: recentCalls }
   ] = await Promise.all([
-    supabase.from("calls").select("*", { count: "exact", head: true }).eq("org_id", orgId),
-    supabase.from("reps").select("*", { count: "exact", head: true }).eq("org_id", orgId),
-    supabase.from("flags").select("*", { count: "exact", head: true }).eq("org_id", orgId),
-    supabase
+    serviceSupabase.from("calls").select("*", { count: "exact", head: true }).eq("org_id", orgId),
+    serviceSupabase.from("reps").select("*", { count: "exact", head: true }).eq("org_id", orgId),
+    serviceSupabase.from("flags").select("*", { count: "exact", head: true }).eq("org_id", orgId),
+    serviceSupabase
       .from("calls")
       .select("*, call_scores(*), reps!left(name)")
       .eq("org_id", orgId)
@@ -31,8 +46,10 @@ export default async function DashboardPage() {
       .limit(5)
   ]);
   
+  console.log(`[DashboardPage] raw=${rawCount}, org=${orgCount}, calls=${callsCount}, recent=${recentCalls?.length}`);
+  
   // Calculate average score
-  const { data: scores } = await supabase
+  const { data: scores } = await serviceSupabase
     .from("call_scores")
     .select("opening_score, discovery_score, rapport_score, objection_handling_score, closing_score, structure_score, product_knowledge_score")
     .in("call_id", recentCalls?.map(c => c.id) || []);
@@ -53,41 +70,25 @@ export default async function DashboardPage() {
   
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* DEBUG INFO */}
+      <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+        <p className="text-sm font-mono text-yellow-800 dark:text-yellow-400">
+          DEBUG: org_id={orgId} | raw_total={rawCount} | org_total={orgCount} | calls_count={callsCount} | recent={recentCalls?.length}
+        </p>
+      </div>
+      
       <div>
         <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Overview</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Welcome back, {user.rep.name}</p>
       </div>
 
-      {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard 
-          icon={<Phone className="w-5 h-5" />} 
-          title="Total Calls" 
-          value={callsCount?.toString() || "0"} 
-          description="All time calls analyzed" 
-        />
-        <StatCard 
-          icon={<BarChart3 className="w-5 h-5" />} 
-          title="Avg Score" 
-          value={avgScore} 
-          description="Average call quality score" 
-        />
-        <StatCard 
-          icon={<Users className="w-5 h-5" />} 
-          title="Team Members" 
-          value={repsCount?.toString() || "0"} 
-          description="Active reps" 
-        />
-        <StatCard 
-          icon={<Flag className="w-5 h-5" />} 
-          title="Flagged Calls" 
-          value={flaggedCount?.toString() || "0"} 
-          description="Calls needing review" 
-        />
+        <StatCard icon={<Phone className="w-5 h-5" />} title="Total Calls" value={callsCount?.toString() || "0"} description="All time calls analyzed" />
+        <StatCard icon={<BarChart3 className="w-5 h-5" />} title="Avg Score" value={avgScore} description="Average call quality score" />
+        <StatCard icon={<Users className="w-5 h-5" />} title="Team Members" value={repsCount?.toString() || "0"} description="Active reps" />
+        <StatCard icon={<Flag className="w-5 h-5" />} title="Flagged Calls" value={flaggedCount?.toString() || "0"} description="Calls needing review" />
       </div>
 
-      {/* Recent Calls Section */}
       <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800">
         <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
           <h2 className="text-lg font-medium text-zinc-900 dark:text-white">Recent Calls</h2>
@@ -101,7 +102,7 @@ export default async function DashboardPage() {
                 <div className="flex items-center gap-4">
                   <div className="flex-1">
                     <p className="font-medium text-zinc-900 dark:text-white">{call.title || "Untitled Call"}</p>
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">{call.reps?.[0]?.name || "Unknown"} • {call.occurred_at ? new Date(call.occurred_at).toLocaleDateString() : "Unknown date"}</p>
+                    <p className="text-sm text-zinc-500 dark:text-zinc-400">{call.reps?.[0]?.name || "No rep"} • {call.created_at ? new Date(call.created_at).toLocaleString() : "Unknown"}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -115,17 +116,17 @@ export default async function DashboardPage() {
             ))}
           </div>
         ) : (
-          <EmptyState 
-            icon={<Phone className="w-12 h-12" />}
-            title="No calls yet"
-            description="Calls will appear here once you connect Fathom or send a test webhook."
-            action={
-              <Link href="/dashboard/settings" className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors">
-                <Plus className="w-4 h-4" />
-                Connect Fathom
-              </Link>
-            }
-          />
+          <div className="p-12 text-center">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
+              <Phone className="w-12 h-12" />
+            </div>
+            <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">No calls yet</h3>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto mb-6">Calls will appear here once you connect Fathom or send a test webhook.</p>
+            <Link href="/dashboard/settings" className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors">
+              <Plus className="w-4 h-4" />
+              Go to Settings
+            </Link>
+          </div>
         )}
       </div>
     </div>
@@ -136,26 +137,11 @@ function StatCard({ icon, title, value, description }: { icon: React.ReactNode; 
   return (
     <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
       <div className="flex items-center gap-3 mb-3">
-        <div className="p-2 bg-indigo-50 dark:bg-indigo-950/50 rounded-lg text-indigo-600 dark:text-indigo-400">
-          {icon}
-        </div>
+        <div className="p-2 bg-indigo-50 dark:bg-indigo-950/50 rounded-lg text-indigo-600 dark:text-indigo-400">{icon}</div>
         <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">{title}</p>
       </div>
       <p className="text-3xl font-semibold text-zinc-900 dark:text-white">{value}</p>
       <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">{description}</p>
-    </div>
-  );
-}
-
-function EmptyState({ icon, title, description, action }: { icon: React.ReactNode; title: string; description: string; action?: React.ReactNode }) {
-  return (
-    <div className="p-12 text-center">
-      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
-        {icon}
-      </div>
-      <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">{title}</h3>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto mb-6">{description}</p>
-      {action}
     </div>
   );
 }
