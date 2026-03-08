@@ -1,15 +1,15 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function AnalysisPage() {
   const user = await getCurrentUser();
   
-  if (!user || !user.isOnboarded) {
+  if (!user) {
     return null;
   }
   
   const supabase = await createClient();
-  const orgId = user.org?.id;
+  const orgId = await getDefaultOrgId();
   
   // Fetch all calls with scores for this org
   const { data: callsWithScores, error } = await supabase

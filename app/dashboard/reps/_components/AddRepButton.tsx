@@ -4,11 +4,10 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { X, Plus } from "lucide-react";
 
-interface AddRepButtonProps {
-  orgId: string;
-}
+// Default org ID for single-tenant mode
+const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
-export default function AddRepButton({ orgId }: AddRepButtonProps) {
+export default function AddRepButton() {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -28,7 +27,7 @@ export default function AddRepButton({ orgId }: AddRepButtonProps) {
     const tempUserId = `pending_${Date.now()}`;
     
     const { error: insertError } = await supabase.from("reps").insert({
-      org_id: orgId,
+      org_id: DEFAULT_ORG_ID,
       clerk_user_id: tempUserId,
       email,
       name,

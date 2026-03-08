@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { Rep } from "@/types";
 import AddRepButton from "./_components/AddRepButton";
@@ -6,12 +6,12 @@ import AddRepButton from "./_components/AddRepButton";
 export default async function RepsPage() {
   const user = await getCurrentUser();
   
-  if (!user || !user.isOnboarded) {
+  if (!user) {
     return null;
   }
   
   const supabase = await createClient();
-  const orgId = user.org?.id;
+  const orgId = await getDefaultOrgId();
   const isAdmin = user.rep?.role === "admin" || user.rep?.role === "manager";
   
   // Fetch reps
@@ -37,7 +37,7 @@ export default async function RepsPage() {
             Manage team members and view performance
           </p>
         </div>
-        {isAdmin && <AddRepButton orgId={orgId!} />}
+        {isAdmin && <AddRepButton />}
       </div>
 
       {/* Reps list */}

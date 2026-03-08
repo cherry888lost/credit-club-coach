@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { CallWithScoreAndRep } from "@/types";
 import Link from "next/link";
@@ -6,12 +6,12 @@ import Link from "next/link";
 export default async function CallsPage() {
   const user = await getCurrentUser();
   
-  if (!user || !user.isOnboarded) {
+  if (!user) {
     return null;
   }
   
   const supabase = await createClient();
-  const orgId = user.org?.id;
+  const orgId = await getDefaultOrgId();
   
   // Fetch calls with scores and rep info
   const { data: calls, error } = await supabase

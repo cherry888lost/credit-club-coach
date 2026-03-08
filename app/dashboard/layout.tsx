@@ -13,12 +13,11 @@ export default async function DashboardLayout({
     redirect("/sign-in");
   }
   
-  if (!user.isOnboarded) {
-    redirect("/onboarding");
-  }
+  // No onboarding redirect - users go straight to dashboard
+  // Rep records are auto-created in getCurrentUser()
   
   return (
-    <DashboardShell orgName={user.org?.name || "Organization"} userRole={user.rep?.role}>
+    <DashboardShell orgName={user.org?.name || "Credit Club Team"} userRole={user.rep?.role}>
       {children}
     </DashboardShell>
   );

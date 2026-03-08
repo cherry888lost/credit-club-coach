@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import Link from "next/link";
@@ -14,18 +14,19 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
   const { id } = await params;
   const user = await getCurrentUser();
   
-  if (!user || !user.isOnboarded) {
+  if (!user) {
     return null;
   }
   
   const supabase = await createClient();
+  const orgId = await getDefaultOrgId();
   
   // Fetch call with scores
   const { data: call, error } = await supabase
     .from("calls")
     .select("*, call_scores(*), reps(name)")
     .eq("id", id)
-    .eq("org_id", user.org?.id)
+    .eq("org_id", orgId)
     .single();
   
   if (error || !call) {
