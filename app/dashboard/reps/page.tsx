@@ -25,16 +25,16 @@ export default async function RepsPage() {
     console.error("Error fetching reps:", error);
   }
   
-  // Get call counts per rep
-  const { data: repStats } = await supabase
+  // Get all calls and count manually
+  const { data: allCalls } = await supabase
     .from("calls")
-    .select("rep_id, count")
-    .eq("org_id", orgId)
-    .group("rep_id");
+    .select("rep_id")
+    .eq("org_id", orgId);
   
   const callCounts: Record<string, number> = {};
-  repStats?.forEach((stat: any) => {
-    callCounts[stat.rep_id] = parseInt(stat.count);
+  allCalls?.forEach((call: any) => {
+    const repId = call.rep_id || 'unassigned';
+    callCounts[repId] = (callCounts[repId] || 0) + 1;
   });
   
   const otherReps = reps?.filter(r => r.clerk_user_id !== user.userId) || [];
