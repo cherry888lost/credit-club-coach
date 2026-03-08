@@ -1,6 +1,14 @@
 import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
-import { BarChart3, TrendingUp, Award } from "lucide-react";
+import { BarChart3, TrendingUp, Award, Users, Flag, Phone } from "lucide-react";
+
+interface RepStats {
+  id: string;
+  name: string;
+  callCount: number;
+  avgScore: number | null;
+  flaggedCount: number;
+}
 
 export default async function AnalysisPage() {
   const user = await getCurrentUser();
@@ -12,231 +20,344 @@ export default async function AnalysisPage() {
   const supabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
   
-  const { data: callsWithScores, error } = await supabase
+  // Fetch all reps first (source of truth)
+  const { data: reps } = await supabase
+    .from("reps")
+    .select("id, name")
+    .eq("org_id", orgId);
+  
+  // Fetch all scored calls with rep info
+  const { data: callsWithData } = await supabase
     .from("calls")
-    .select("*, call_scores(*), reps!left(name)")
+    .select(`
+      id,
+      rep_id,
+      call_scores(
+        opening_score, discovery_score, rapport_score,
+        objection_handling_score, closing_score, structure_score, product_knowledge_score,
+        strengths, improvements
+      )
+    `)
     .eq("org_id", orgId)
     .not("call_scores", "is", null);
   
-  if (error) {
-    console.error("Error fetching calls:", error);
-  }
+  // Fetch all flags
+  const { data: allFlags } = await supabase
+    .from("flags")
+    .select("call_id")
+    .eq("org_id", orgId);
   
-  // Filter to only calls that have at least one score
-  const scoredCalls = (callsWithScores || []).filter(call => 
-    call.call_scores && (
-      call.call_scores.opening_score ||
-      call.call_scores.discovery_score ||
-      call.call_scores.rapport_score ||
-      call.call_scores.objection_handling_score ||
-      call.call_scores.closing_score ||
-      call.call_scores.structure_score ||
-      call.call_scores.product_knowledge_score
-    )
-  );
+  const flagSet = new Set(allFlags?.map(f => f.call_id) || []);
   
-  const allScores = scoredCalls.map(call => call.call_scores).filter(Boolean);
+  // Calculate rep stats properly
+  const repStatsMap: Record<string, RepStats> = {};
   
-  const avgScores = {
-    opening: calculateAvg(allScores.map(s => s?.opening_score)),
-    discovery: calculateAvg(allScores.map(s => s?.discovery_score)),
-    rapport: calculateAvg(allScores.map(s => s?.rapport_score)),
-    objection_handling: calculateAvg(allScores.map(s => s?.objection_handling_score)),
-    closing: calculateAvg(allScores.map(s => s?.closing_score)),
-    structure: calculateAvg(allScores.map(s => s?.structure_score)),
-    product_knowledge: calculateAvg(allScores.map(s => s?.product_knowledge_score)),
-  };
+  // Initialize all reps
+  reps?.forEach(rep => {
+    repStatsMap[rep.id] = {
+      id: rep.id,
+      name: rep.name,
+      callCount: 0,
+      avgScore: null,
+      flaggedCount: 0,
+    };
+  });
   
-  const overallAvg = calculateAvg([
-    avgScores.opening, avgScores.discovery, avgScores.rapport, avgScores.objection_handling,
-    avgScores.closing, avgScores.structure, avgScores.product_knowledge,
-  ].filter((s): s is number => s !== null));
-  
-  // Parse strengths and improvements from JSON
+  const allScores: number[] = [];
   const allStrengths: string[] = [];
   const allImprovements: string[] = [];
   
-  allScores.forEach(score => {
-    if (score?.strengths) {
-      const strengths = typeof score.strengths === 'string' ? JSON.parse(score.strengths) : score.strengths;
-      if (Array.isArray(strengths)) allStrengths.push(...strengths);
+  callsWithData?.forEach((call: any) => {
+    const scores = call.call_scores;
+    if (!scores) return;
+    
+    const scoreValues = [
+      scores.opening_score, scores.discovery_score, scores.rapport_score,
+      scores.objection_handling_score, scores.closing_score, scores.structure_score,
+      scores.product_knowledge_score,
+    ].filter((s: number | null): s is number => s !== null && s !== undefined);
+    
+    if (scoreValues.length === 0) return;
+    
+    const callAvg = scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length;
+    allScores.push(callAvg);
+    
+    // Parse strengths/improvements
+    if (scores.strengths) {
+      const s = typeof scores.strengths === 'string' ? JSON.parse(scores.strengths) : scores.strengths;
+      if (Array.isArray(s)) allStrengths.push(...s);
     }
-    if (score?.improvements) {
-      const improvements = typeof score.improvements === 'string' ? JSON.parse(score.improvements) : score.improvements;
-      if (Array.isArray(improvements)) allImprovements.push(...improvements);
+    if (scores.improvements) {
+      const i = typeof scores.improvements === 'string' ? JSON.parse(scores.improvements) : scores.improvements;
+      if (Array.isArray(i)) allImprovements.push(...i);
+    }
+    
+    // Update rep stats
+    const repId = call.rep_id;
+    if (repId && repStatsMap[repId]) {
+      const rep = repStatsMap[repId];
+      rep.callCount++;
+      
+      // Calculate running average
+      if (rep.avgScore === null) {
+        rep.avgScore = callAvg;
+      } else {
+        rep.avgScore = (rep.avgScore * (rep.callCount - 1) + callAvg) / rep.callCount;
+      }
+      
+      if (flagSet.has(call.id)) {
+        rep.flaggedCount++;
+      }
     }
   });
+  
+  const overallAvg = allScores.length > 0 
+    ? allScores.reduce((a, b) => a + b, 0) / allScores.length 
+    : null;
+  
+  const leaderboard = Object.values(repStatsMap)
+    .filter(r => r.callCount > 0)
+    .sort((a, b) => (b.avgScore || 0) - (a.avgScore || 0));
+  
+  const categoryScores = {
+    Opening: calculateCategoryAvg(callsWithData, 'opening_score'),
+    Discovery: calculateCategoryAvg(callsWithData, 'discovery_score'),
+    Rapport: calculateCategoryAvg(callsWithData, 'rapport_score'),
+    'Objection Handling': calculateCategoryAvg(callsWithData, 'objection_handling_score'),
+    Closing: calculateCategoryAvg(callsWithData, 'closing_score'),
+    Structure: calculateCategoryAvg(callsWithData, 'structure_score'),
+    'Product Knowledge': calculateCategoryAvg(callsWithData, 'product_knowledge_score'),
+  };
   
   const strengthCounts = countFrequency(allStrengths);
   const improvementCounts = countFrequency(allImprovements);
   
-  const topStrengths = Object.entries(strengthCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const topImprovements = Object.entries(improvementCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const topStrengths = Object.entries(strengthCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
   
-  // Build leaderboard
-  const repScores: Record<string, { name: string; scores: number[]; count: number }> = {};
+  const topImprovements = Object.entries(improvementCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
   
-  scoredCalls.forEach(call => {
-    const repName = call.reps?.[0]?.name || "Unknown";
-    if (!repScores[repName]) {
-      repScores[repName] = { name: repName, scores: [], count: 0 };
-    }
-    
-    const callScores = [
-      call.call_scores?.opening_score, call.call_scores?.discovery_score, call.call_scores?.rapport_score,
-      call.call_scores?.objection_handling_score, call.call_scores?.closing_score, call.call_scores?.structure_score,
-      call.call_scores?.product_knowledge_score,
-    ].filter((s): s is number => s !== null);
-    
-    if (callScores.length > 0) {
-      const callAvg = callScores.reduce((a, b) => a + b, 0) / callScores.length;
-      repScores[repName].scores.push(callAvg);
-      repScores[repName].count++;
-    }
-  });
+  const hasData = allScores.length > 0;
+  const totalReps = Object.values(repStatsMap).filter(r => r.callCount > 0).length;
+  const totalFlagged = Array.from(flagSet).filter(callId => 
+    callsWithData?.some(c => c.id === callId)
+  ).length;
   
-  const leaderboard = Object.values(repScores)
-    .map(rep => ({ ...rep, avgScore: rep.scores.length > 0 ? rep.scores.reduce((a, b) => a + b, 0) / rep.scores.length : 0 }))
-    .sort((a, b) => b.avgScore - a.avgScore);
-  
-  const scoreCategories = [
-    { name: "Opening", score: avgScores.opening },
-    { name: "Discovery", score: avgScores.discovery },
-    { name: "Rapport Building", score: avgScores.rapport },
-    { name: "Objection Handling", score: avgScores.objection_handling },
-    { name: "Closing", score: avgScores.closing },
-    { name: "Structure", score: avgScores.structure },
-    { name: "Product Knowledge", score: avgScores.product_knowledge },
-  ];
-  
-  const hasData = scoredCalls.length > 0;
-  
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Analysis</h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">AI-powered insights and call scoring</p>
-      </div>
-      
-      {!hasData ? (
+  if (!hasData) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Analysis</h1>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">AI-powered insights and call scoring</p>
+        </div>
+        
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-12 text-center">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
             <BarChart3 className="w-12 h-12" />
           </div>
           <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">No scored calls yet</h3>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
-            Analysis appears here once calls are scored. Send a test webhook from Settings to create demo calls with scores.
+            Send test webhooks to generate demo calls with scores.
           </p>
         </div>
-      ) : (
-        <>
-          {overallAvg !== null && (
-            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-              <div className="flex items-center gap-6">
-                <div className="text-center">
-                  <span className={`text-5xl font-bold ${overallAvg >= 8 ? "text-green-600 dark:text-green-400" : overallAvg >= 6 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}`}>{overallAvg.toFixed(1)}</span>
-                  <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">Team Average</p>
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">Based on {scoredCalls.length} scored calls across {Object.keys(repScores).length} reps</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-              <div className="flex items-center gap-3 mb-4">
-                <TrendingUp className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                <h3 className="text-lg font-medium text-zinc-900 dark:text-white">Score Breakdown</h3>
-              </div>
-              <div className="space-y-4">
-                {scoreCategories.map((category) => (
-                  <div key={category.name}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-zinc-600 dark:text-zinc-400">{category.name}</span>
-                      <span className="text-sm font-medium text-zinc-900 dark:text-white">{category.score?.toFixed(1) || "-"}</span>
-                    </div>
-                    <div className="w-full h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-                      <div className="h-full bg-indigo-600 rounded-full transition-all" style={{ width: category.score ? `${(category.score / 10) * 100}%` : "0%" }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-                <h3 className="text-lg font-medium text-green-600 dark:text-green-400 mb-4">Top Strengths</h3>
-                {topStrengths.length > 0 ? (
-                  <ul className="space-y-2">
-                    {topStrengths.map(([strength, count]) => (
-                      <li key={strength} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-center justify-between">
-                        <span>{strength}</span>
-                        <span className="text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">{count} calls</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-zinc-500 dark:text-zinc-400 text-sm">No strengths data yet</p>
-                )}
-              </div>
-
-              <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-                <h3 className="text-lg font-medium text-amber-600 dark:text-amber-400 mb-4">Common Improvements</h3>
-                {topImprovements.length > 0 ? (
-                  <ul className="space-y-2">
-                    {topImprovements.map(([improvement, count]) => (
-                      <li key={improvement} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-center justify-between">
-                        <span>{improvement}</span>
-                        <span className="text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">{count} calls</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-zinc-500 dark:text-zinc-400 text-sm">No improvement data yet</p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800">
-            <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
+      </div>
+    );
+  }
+  
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Analysis</h1>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Team performance and coaching insights</p>
+      </div>
+      
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KpiCard 
+          icon={<BarChart3 className="w-5 h-5" />}
+          label="Team Average"
+          value={overallAvg?.toFixed(1) || "-"}
+          color={overallAvg && overallAvg >= 8 ? "green" : overallAvg && overallAvg < 7 ? "red" : "default"}
+        />
+        <KpiCard 
+          icon={<Phone className="w-5 h-5" />}
+          label="Scored Calls"
+          value={allScores.length.toString()}
+        />
+        <KpiCard 
+          icon={<Users className="w-5 h-5" />}
+          label="Active Reps"
+          value={totalReps.toString()}
+        />
+        <KpiCard 
+          icon={<Flag className="w-5 h-5" />}
+          label="Flagged"
+          value={totalFlagged.toString()}
+          color={totalFlagged > 0 ? "red" : "default"}
+        />
+      </div>
+      
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        {/* Leaderboard */}
+        <div className="xl:col-span-2 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <div className="p-6 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="flex items-center gap-3">
               <Award className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
               <h2 className="text-lg font-medium text-zinc-900 dark:text-white">Rep Leaderboard</h2>
             </div>
-            
-            {leaderboard.length > 0 ? (
-              <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                {leaderboard.map((rep, index) => (
-                  <div key={rep.name} className="flex items-center justify-between p-4">
-                    <div className="flex items-center gap-4">
-                      <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${index === 0 ? "bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400" : index === 1 ? "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400" : index === 2 ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500"}`}>{index + 1}</span>
-                      <span className="font-medium text-zinc-900 dark:text-white">{rep.name}</span>
-                    </div>
-                    <div className="flex items-center gap-6">
-                      <span className="text-sm text-zinc-500 dark:text-zinc-400">{rep.count} calls</span>
-                      <span className={`text-lg font-semibold w-16 text-right ${rep.avgScore >= 8 ? "text-green-600 dark:text-green-400" : rep.avgScore >= 6 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}`}>{rep.avgScore.toFixed(1)}</span>
+          </div>
+          
+          {leaderboard.length > 0 ? (
+            <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+              {leaderboard.map((rep, index) => (
+                <div key={rep.id} className="p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <RankBadge rank={index + 1} />
+                    <div>
+                      <p className="font-medium text-zinc-900 dark:text-white">{rep.name}</p>
+                      <p className="text-sm text-zinc-500 dark:text-zinc-400">{rep.callCount} calls</p>
                     </div>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-12 text-center text-zinc-500 dark:text-zinc-400">
-                No leaderboard data yet
-              </div>
-            )}
+                  <div className="flex items-center gap-6">
+                    {rep.flaggedCount > 0 && (
+                      <span className="text-sm text-red-600 dark:text-red-400">{rep.flaggedCount} flagged</span>
+                    )}
+                    <ScoreBadge score={rep.avgScore} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-12 text-center text-zinc-500 dark:text-zinc-400">
+              No rep data available
+            </div>
+          )}
+        </div>
+        
+        {/* Score Breakdown */}
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <TrendingUp className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            <h2 className="text-lg font-medium text-zinc-900 dark:text-white">Score Breakdown</h2>
           </div>
-        </>
-      )}
+          <div className="space-y-4">
+            {Object.entries(categoryScores).map(([name, score]) => (
+              <div key={name}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">{name}</span>
+                  <span className="text-sm font-medium text-zinc-900 dark:text-white">{score?.toFixed(1) || "-"}</span>
+                </div>
+                <div className="w-full h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-indigo-600 rounded-full" 
+                    style={{ width: score ? `${(score / 10) * 100}%` : "0%" }} 
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      
+      {/* Strengths & Improvements */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+          <h3 className="text-lg font-medium text-green-600 dark:text-green-400 mb-4">Top Strengths</h3>
+          {topStrengths.length > 0 ? (
+            <ul className="space-y-3">
+              {topStrengths.map(([strength, count]) => (
+                <li key={strength} className="flex items-center justify-between text-sm">
+                  <span className="text-zinc-700 dark:text-zinc-300">{strength}</span>
+                  <span className="text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">{count}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-zinc-500 dark:text-zinc-400 text-sm">No data yet</p>
+          )}
+        </div>
+        
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+          <h3 className="text-lg font-medium text-amber-600 dark:text-amber-400 mb-4">Areas for Improvement</h3>
+          {topImprovements.length > 0 ? (
+            <ul className="space-y-3">
+              {topImprovements.map(([improvement, count]) => (
+                <li key={improvement} className="flex items-center justify-between text-sm">
+                  <span className="text-zinc-700 dark:text-zinc-300">{improvement}</span>
+                  <span className="text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">{count}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-zinc-500 dark:text-zinc-400 text-sm">No data yet</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-function calculateAvg(values: (number | null | undefined)[]): number | null {
-  const valid = values.filter((v): v is number => v !== null && v !== undefined);
-  if (valid.length === 0) return null;
-  return valid.reduce((a, b) => a + b, 0) / valid.length;
+function KpiCard({ icon, label, value, color = "default" }: { 
+  icon: React.ReactNode; 
+  label: string; 
+  value: string;
+  color?: "green" | "red" | "default";
+}) {
+  const colorClasses = {
+    green: "bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400",
+    red: "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400",
+    default: "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white",
+  };
+  
+  return (
+    <div className={`p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 ${colorClasses[color]}`}>
+      <div className="flex items-center gap-2 mb-2 text-zinc-500 dark:text-zinc-400">
+        {icon}
+        <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
+      </div>
+      <p className="text-3xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function RankBadge({ rank }: { rank: number }) {
+  const colors = [
+    "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
+    "bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300",
+    "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+    "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  ];
+  
+  return (
+    <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${colors[Math.min(rank - 1, 3)]}`}>
+      {rank}
+    </span>
+  );
+}
+
+function ScoreBadge({ score }: { score: number | null }) {
+  if (score === null) return <span className="text-zinc-400">-</span>;
+  
+  const color = score >= 8 ? "text-green-600 dark:text-green-400" : score < 7 ? "text-red-600 dark:text-red-400" : "text-zinc-900 dark:text-white";
+  
+  return (
+    <span className={`text-lg font-bold ${color}`}>
+      {score.toFixed(1)}
+    </span>
+  );
+}
+
+function calculateCategoryAvg(calls: any[] | null, field: string): number | null {
+  if (!calls) return null;
+  const values = calls
+    .map(c => c.call_scores?.[field])
+    .filter((v): v is number => v !== null && v !== undefined);
+  
+  if (values.length === 0) return null;
+  return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
 function countFrequency(items: string[]): Record<string, number> {
