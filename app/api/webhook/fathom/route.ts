@@ -85,7 +85,11 @@ export async function POST(request: NextRequest) {
   const requestId = randomUUID();
   const timestamp = new Date().toISOString();
   
-  console.log(`[WEBHOOK ${requestId}] Received POST request at ${timestamp}`);
+  // EARLY LOG - confirm route is hit
+  console.log(`[WEBHOOK ${requestId}] ===== ROUTE HIT =====`);
+  console.log(`[WEBHOOK ${requestId}] URL: ${request.url}`);
+  console.log(`[WEBHOOK ${requestId}] Method: ${request.method}`);
+  console.log(`[WEBHOOK ${requestId}] Content-Type: ${request.headers.get('content-type')}`);
   
   try {
     // Get signature from header

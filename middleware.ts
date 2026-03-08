@@ -5,13 +5,19 @@ const isPublicRoute = createRouteMatcher([
   "/",
   "/sign-in(.*)",
   "/sign-up(.*)",
-  "/api(.*)",
+  "/api/webhook(.*)",  // Webhooks must be public
+  "/api/test-webhook", // Test endpoint must be public
 ]);
 
 export default clerkMiddleware(async (auth, req) => {
+  console.log(`[MIDDLEWARE] ${req.method} ${req.url}`);
+  
   // Protect all routes except public ones
   if (!isPublicRoute(req)) {
+    console.log(`[MIDDLEWARE] Protecting route: ${req.url}`);
     await auth.protect();
+  } else {
+    console.log(`[MIDDLEWARE] Public route, skipping auth: ${req.url}`);
   }
 });
 

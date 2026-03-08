@@ -5,7 +5,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  console.log("[TEST_WEBHOOK] ==================== START ====================");
+  console.log("[TEST_WEBHOOK] ===== ROUTE HIT =====");
+  console.log(`[TEST_WEBHOOK] URL: ${request.url}`);
+  console.log(`[TEST_WEBHOOK] Method: ${request.method}`);
   
   try {
     // Parse request body
