@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Send, RefreshCw, CheckCircle, AlertCircle } from "lucide-react";
 
-export default function SendTestWebhookButton({ onSuccess }: { onSuccess?: () => void }) {
+export default function SendTestWebhookButton() {
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [result, setResult] = useState<any>(null);
   
@@ -36,10 +36,15 @@ export default function SendTestWebhookButton({ onSuccess }: { onSuccess?: () =>
       
       const data = await response.json();
       setResult(data);
-      setStatus(data.success ? "success" : "error");
       
-      if (data.success && onSuccess) {
-        onSuccess();
+      if (data.success) {
+        setStatus("success");
+        // Hard refresh the page to show new call
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      } else {
+        setStatus("error");
       }
     } catch (err) {
       setStatus("error");
@@ -62,7 +67,7 @@ export default function SendTestWebhookButton({ onSuccess }: { onSuccess?: () =>
         ) : status === "success" ? (
           <>
             <CheckCircle className="w-4 h-4" />
-            Sent!
+            Sent! Refreshing...
           </>
         ) : (
           <>

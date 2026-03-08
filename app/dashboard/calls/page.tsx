@@ -2,8 +2,11 @@ import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { CallWithScoreAndRep } from "@/types";
 import Link from "next/link";
-import { Phone, Plus } from "lucide-react";
+import { Phone } from "lucide-react";
 import SendTestWebhookButton from "./_components/SendTestWebhookButton";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function CallsPage() {
   const user = await getCurrentUser();
@@ -15,17 +18,19 @@ export default async function CallsPage() {
   const supabase = await createClient();
   const orgId = await getDefaultOrgId();
   
+  console.log(`[CallsPage] Fetching calls for org: ${orgId}`);
+  
   const { data: calls, error } = await supabase
     .from("calls")
     .select("*, call_scores(*), reps!left(name)")
     .eq("org_id", orgId)
-    .order("occurred_at", { ascending: false });
+    .order("created_at", { ascending: false });
   
   if (error) {
-    console.error("[CallsPage] Error fetching calls:", error);
+    console.error("[CallsPage] Error:", error);
   }
   
-  console.log(`[CallsPage] Fetched ${calls?.length || 0} calls for org ${orgId}`);
+  console.log(`[CallsPage] Found ${calls?.length || 0} calls`);
   
   const callsWithAvgScore = (calls || []).map((call: CallWithScoreAndRep) => {
     const scores = call.call_scores;
@@ -50,7 +55,7 @@ export default async function CallsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Calls</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">View and analyze all recorded calls</p>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">View and analyze all recorded calls ({calls?.length || 0} total)</p>
         </div>
         <SendTestWebhookButton />
       </div>
@@ -64,10 +69,6 @@ export default async function CallsPage() {
       )}
 
       <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800">
-        <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
-          <h2 className="text-lg font-medium text-zinc-900 dark:text-white">All Calls ({calls?.length || 0})</h2>
-        </div>
-        
         {callsWithAvgScore.length > 0 ? (
           <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
             {callsWithAvgScore.map((call) => (
@@ -75,7 +76,7 @@ export default async function CallsPage() {
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-zinc-900 dark:text-white truncate">{call.title || "Untitled Call"}</p>
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                    {call.reps?.[0]?.name || "Unknown"} • {call.occurred_at ? new Date(call.occurred_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) : "Unknown date"}
+                    {call.reps?.[0]?.name || "Unknown"} • {call.created_at ? new Date(call.created_at).toLocaleString() : "Unknown"}
                   </p>
                 </div>
                 <div className="flex items-center gap-4">
@@ -96,8 +97,8 @@ export default async function CallsPage() {
         ) : (
           <EmptyState 
             icon={<Phone className="w-12 h-12" />}
-            title="No calls found yet"
-            description="Calls appear here automatically when Fathom sends webhooks. Click the button above to send a test webhook."
+            title="No calls found"
+            description="Click 'Send Test Webhook' above to create a test call."
           />
         )}
       </div>
