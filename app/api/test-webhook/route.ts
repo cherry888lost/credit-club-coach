@@ -1,116 +1,202 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
+import { createServiceClient } from "@/lib/supabase/server";
+import { DEFAULT_ORG_ID } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Demo data templates
+const DEMO_NAMES = ["Sarah Johnson", "Michael Chen", "Emily Davis", "David Smith", "Jessica Brown", "James Wilson"];
+const DEMO_REPS = ["Test Closer", "Test Manager"];
+
+const DEMO_TRANSCRIPTS = [
+  "Rep: Hi, thanks for joining today. I wanted to understand your current credit card setup.\n\nCustomer: Yeah I have a few cards but I'm not really maximizing the points.\n\nRep: Great, let me show you how our system can help you earn 3x on travel...",
+  "Rep: Hi, following up on our conversation about the Amex Gold. Did you have a chance to review the materials?\n\nCustomer: I'm still thinking about the annual fee. It seems high.\n\nRep: I understand, let me break down how the dining credits and Uber credits offset that completely...",
+  "Rep: Hello! I saw you downloaded our credit optimization guide. What questions can I answer?\n\nCustomer: I'm confused about which card to get first.\n\nRep: Perfect question. For someone in your situation with good credit but no premium cards, I'd recommend starting with the Chase Sapphire Preferred...",
+];
+
+const DEMO_STRENGTHS = [
+  ["Strong rapport building", "Clear value proposition", "Good pacing"],
+  ["Excellent product knowledge", "Confident delivery", "Good use of social proof"],
+  ["Strong opening hook", "Effective discovery questions", "Clear next steps"],
+];
+
+const DEMO_IMPROVEMENTS = [
+  ["Could ask more about travel spending", "Closing could be more assumptive"],
+  ["Discovery questions too brief", "Did not address the annual fee proactively"],
+  ["Should have mentioned signup bonus earlier", "No urgency created"],
+];
+
 export async function POST(request: NextRequest) {
-  console.log("[TEST_WEBHOOK] ===== ROUTE HIT =====");
-  console.log(`[TEST_WEBHOOK] URL: ${request.url}`);
-  console.log(`[TEST_WEBHOOK] Method: ${request.method}`);
-  
   try {
-    // Parse request body
-    let body;
-    try {
-      body = await request.json();
-      console.log("[TEST_WEBHOOK] Request body parsed:", JSON.stringify(body, null, 2));
-    } catch (parseError) {
-      console.error("[TEST_WEBHOOK] Failed to parse request body:", parseError);
-      return NextResponse.json(
-        { error: "Invalid JSON in request body", details: String(parseError) },
-        { status: 400 }
-      );
+    const serviceSupabase = await createServiceClient();
+    
+    // Get current user count to vary demo data
+    const { count: callCount } = await serviceSupabase
+      .from("calls")
+      .select("*", { count: "exact", head: true });
+    
+    const demoIndex = (callCount || 0) % DEMO_NAMES.length;
+    const customerName = DEMO_NAMES[demoIndex];
+    const repName = DEMO_REPS[demoIndex % DEMO_REPS.length];
+    
+    // Find or create demo rep
+    let repId: string | null = null;
+    const { data: existingRep } = await serviceSupabase
+      .from("reps")
+      .select("id")
+      .eq("name", repName)
+      .single();
+    
+    if (existingRep) {
+      repId = existingRep.id;
+    } else {
+      // Create demo rep
+      const { data: newRep } = await serviceSupabase
+        .from("reps")
+        .insert({
+          org_id: DEFAULT_ORG_ID,
+          clerk_user_id: `demo_${repName.toLowerCase().replace(/\s+/g, '_')}`,
+          email: `${repName.toLowerCase().replace(/\s+/g, '.')}@creditclub.com`,
+          name: repName,
+          role: repName.includes("Manager") ? "manager" : "closer",
+          status: "active",
+        })
+        .select()
+        .single();
+      if (newRep) repId = newRep.id;
     }
     
-    const { payload } = body;
+    // Generate realistic scores (6-9 range)
+    const scores = {
+      opening: Math.floor(Math.random() * 4) + 6,
+      discovery: Math.floor(Math.random() * 4) + 6,
+      rapport: Math.floor(Math.random() * 4) + 6,
+      objection_handling: Math.floor(Math.random() * 4) + 6,
+      closing: Math.floor(Math.random() * 4) + 6,
+      structure: Math.floor(Math.random() * 4) + 6,
+      product_knowledge: Math.floor(Math.random() * 4) + 6,
+    };
     
-    if (!payload) {
-      console.error("[TEST_WEBHOOK] Missing payload in request");
-      return NextResponse.json({ error: "Missing payload" }, { status: 400 });
-    }
+    const avgScore = Math.round((Object.values(scores).reduce((a, b) => a + b, 0) / 7) * 10) / 10;
     
-    // Get secret
+    // Create call
+    const callPayload = {
+      id: `demo_call_${Date.now()}`,
+      title: `${customerName} - Discovery Call`,
+      started_at: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString(), // Within last week
+      transcript: DEMO_TRANSCRIPTS[demoIndex % DEMO_TRANSCRIPTS.length],
+      recording_url: "https://example.com/demo-recording.mp4",
+      host: {
+        email: repName.toLowerCase().replace(/\s+/g, '.') + "@creditclub.com",
+        name: repName
+      },
+      metadata: {
+        source: "demo_webhook",
+        customer_name: customerName,
+        demo_index: demoIndex,
+      }
+    };
+    
+    // Generate signature
     const secret = process.env.FATHOM_WEBHOOK_SECRET;
-    console.log(`[TEST_WEBHOOK] FATHOM_WEBHOOK_SECRET exists: ${!!secret}`);
-    
     if (!secret) {
-      console.error("[TEST_WEBHOOK] FATHOM_WEBHOOK_SECRET not configured");
       return NextResponse.json(
-        { 
-          error: "Webhook secret not configured on server",
-          hint: "Add FATHOM_WEBHOOK_SECRET to your environment variables"
-        },
+        { error: "FATHOM_WEBHOOK_SECRET not configured" },
         { status: 500 }
       );
     }
     
-    // Generate signature
-    const payloadString = JSON.stringify(payload);
-    const signature = createHash("sha256")
-      .update(payloadString + secret)
-      .digest("hex");
+    const payloadString = JSON.stringify(callPayload);
+    const signature = createHash("sha256").update(payloadString + secret).digest("hex");
     
-    console.log(`[TEST_WEBHOOK] Generated signature: ${signature.substring(0, 20)}...`);
-    console.log(`[TEST_WEBHOOK] Payload: ${payloadString.substring(0, 200)}...`);
-    
-    // Build webhook URL - use absolute URL for production
+    // Send to webhook
     const host = request.headers.get("host") || "localhost:3000";
     const protocol = host.includes("localhost") ? "http" : "https";
     const webhookUrl = `${protocol}://${host}/api/webhook/fathom`;
-    console.log(`[TEST_WEBHOOK] Target URL: ${webhookUrl}`);
     
-    // Send to actual webhook endpoint
-    console.log("[TEST_WEBHOOK] Sending request to webhook endpoint...");
-    let response;
-    try {
-      response = await fetch(webhookUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Fathom-Signature": signature,
-        },
-        body: payloadString,
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Fathom-Signature": signature,
+      },
+      body: payloadString,
+    });
+    
+    const result = await response.json();
+    
+    if (!response.ok) {
+      return NextResponse.json({
+        success: false,
+        status: response.status,
+        result,
       });
-      console.log(`[TEST_WEBHOOK] Webhook response status: ${response.status}`);
-    } catch (fetchError) {
-      console.error("[TEST_WEBHOOK] Fetch failed:", fetchError);
-      return NextResponse.json(
-        { 
-          error: "Failed to connect to webhook endpoint", 
-          details: fetchError instanceof Error ? fetchError.message : String(fetchError)
-        },
-        { status: 500 }
-      );
     }
     
-    // Get response body
-    let result;
-    const responseText = await response.text();
-    console.log(`[TEST_WEBHOOK] Raw response: ${responseText.substring(0, 500)}`);
-    
-    try {
-      result = JSON.parse(responseText);
-    } catch {
-      result = { rawResponse: responseText };
+    // Now update the call with demo scores
+    if (result.callId) {
+      const strengths = DEMO_STRENGTHS[demoIndex % DEMO_STRENGTHS.length];
+      const improvements = DEMO_IMPROVEMENTS[demoIndex % DEMO_IMPROVEMENTS.length];
+      
+      const { error: scoreError } = await serviceSupabase
+        .from("call_scores")
+        .update({
+          opening_score: scores.opening,
+          discovery_score: scores.discovery,
+          rapport_score: scores.rapport,
+          objection_handling_score: scores.objection_handling,
+          closing_score: scores.closing,
+          structure_score: scores.structure,
+          product_knowledge_score: scores.product_knowledge,
+          ai_summary: `Good discovery call with ${customerName}. Rep demonstrated solid product knowledge and built rapport effectively. Overall score: ${avgScore}/10.`,
+          strengths: JSON.stringify(strengths),
+          improvements: JSON.stringify(improvements),
+        })
+        .eq("call_id", result.callId);
+      
+      if (scoreError) {
+        console.error("Failed to update scores:", scoreError);
+      }
+      
+      // Update call with rep_id if found
+      if (repId) {
+        await serviceSupabase
+          .from("calls")
+          .update({ rep_id: repId })
+          .eq("id", result.callId);
+      }
+      
+      // Maybe flag low-scoring calls
+      if (avgScore < 7) {
+        await serviceSupabase.from("flags").insert({
+          org_id: DEFAULT_ORG_ID,
+          call_id: result.callId,
+          type: "coaching_needed",
+          note: `Low score (${avgScore}/10). Review ${improvements.join(", ")}.`,
+        });
+      }
     }
-    
-    console.log("[TEST_WEBHOOK] ==================== END ====================");
     
     return NextResponse.json({
-      success: response.ok,
+      success: true,
       status: response.status,
-      result,
+      result: {
+        ...result,
+        demoData: {
+          customerName,
+          repName,
+          avgScore,
+          scores,
+        }
+      },
     });
     
   } catch (error) {
-    console.error("[TEST_WEBHOOK] Unhandled error:", error);
+    console.error("[TEST_WEBHOOK] Error:", error);
     return NextResponse.json(
-      { 
-        error: "Internal server error in test webhook",
-        details: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined
-      },
+      { error: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }
     );
   }

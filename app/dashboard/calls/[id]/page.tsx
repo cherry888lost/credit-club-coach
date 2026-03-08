@@ -1,8 +1,8 @@
 import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Play } from "lucide-react";
+import { ArrowLeft, Play, Calendar, User, Flag, Hash } from "lucide-react";
 
 interface CallDetailPageProps {
   params: Promise<{ id: string }>;
@@ -16,7 +16,7 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
     return null;
   }
   
-  const supabase = await createClient();
+  const supabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
   
   const { data: call, error } = await supabase
@@ -30,8 +30,20 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
     notFound();
   }
   
+  // Check if call is flagged
+  const { data: flags } = await supabase
+    .from("flags")
+    .select("*")
+    .eq("call_id", id)
+    .eq("org_id", orgId);
+  
+  const isFlagged = flags && flags.length > 0;
+  const flagNote = flags?.[0]?.note;
+  
   const scores = call.call_scores;
-  const scoreCategories = scores ? [
+  const hasScores = scores && (scores.opening_score || scores.discovery_score || scores.rapport_score);
+  
+  const scoreCategories = hasScores ? [
     { name: "Opening", score: scores.opening_score },
     { name: "Discovery", score: scores.discovery_score },
     { name: "Rapport", score: scores.rapport_score },
@@ -41,9 +53,17 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
     { name: "Product Knowledge", score: scores.product_knowledge_score },
   ] : [];
   
-  const avgScore = scoreCategories.length > 0 
+  const avgScore = scoreCategories.length > 0 && scoreCategories.some(s => s.score)
     ? (scoreCategories.filter(s => s.score).reduce((a, b) => a + (b.score || 0), 0) / scoreCategories.filter(s => s.score).length).toFixed(1)
     : null;
+  
+  // Parse strengths/improvements from JSON if needed
+  const strengths = scores?.strengths 
+    ? (typeof scores.strengths === 'string' ? JSON.parse(scores.strengths) : scores.strengths)
+    : [];
+  const improvements = scores?.improvements
+    ? (typeof scores.improvements === 'string' ? JSON.parse(scores.improvements) : scores.improvements)
+    : [];
   
   return (
     <div className="space-y-6">
@@ -52,19 +72,43 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
       </Link>
       
       <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">{call.title || "Untitled Call"}</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            {call.reps?.[0]?.name || "Unknown"} • {call.occurred_at ? new Date(call.occurred_at).toLocaleString() : "Unknown date"}
-          </p>
+        <div className="flex-1">
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">{call.title || "Untitled Call"}</h1>
+            {isFlagged && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 text-xs font-medium rounded-full">
+                <Flag className="w-3 h-3" />
+                Flagged
+              </span>
+            )}
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-4 text-sm text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1"><User className="w-4 h-4" />{call.reps?.[0]?.name || "Unassigned"}</span>
+            <span className="flex items-center gap-1"><Calendar className="w-4 h-4" />{call.created_at ? new Date(call.created_at).toLocaleString() : "Unknown date"}</span>
+            {call.fathom_call_id && (
+              <span className="flex items-center gap-1"><Hash className="w-4 h-4" />{call.fathom_call_id.slice(0, 12)}...</span>
+            )}
+          </div>          
+          {flagNote && (
+            <div className="mt-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <p className="text-sm text-red-700 dark:text-red-400"><strong>Flag:</strong> {flagNote}</p>
+            </div>
+          )}
         </div>
         
-        {avgScore && (
+        {avgScore ? (
           <div className="text-right">
             <span className={`inline-flex items-center px-3 py-1.5 rounded-lg text-lg font-semibold ${parseFloat(avgScore) >= 8 ? "bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400" : parseFloat(avgScore) >= 6 ? "bg-yellow-50 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400" : "bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400"}`}>
               {avgScore}
             </span>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">Overall Score</p>
+          </div>
+        ) : (
+          <div className="text-right">
+            <span className="inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
+              Not scored
+            </span>
           </div>
         )}
       </div>
@@ -95,9 +139,9 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
         </div>
         
         <div className="space-y-6">
-          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-            <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Score Breakdown</h3>
-            {scoreCategories.length > 0 ? (
+          {scoreCategories.length > 0 && scoreCategories.some(s => s.score) && (
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+              <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Score Breakdown</h3>
               <div className="space-y-4">
                 {scoreCategories.map((category) => (
                   <div key={category.name}>
@@ -111,10 +155,8 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="text-zinc-500 dark:text-zinc-400">No scores available</p>
-            )}
-          </div>
+            </div>
+          )}
           
           {scores?.ai_summary && (
             <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
@@ -123,23 +165,29 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
             </div>
           )}
           
-          {scores?.strengths && scores.strengths.length > 0 && (
+          {strengths.length > 0 && (
             <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
               <h3 className="text-lg font-medium text-green-600 dark:text-green-400 mb-4">Strengths</h3>
               <ul className="space-y-2">
-                {scores.strengths.map((strength: string, i: number) => (
-                  <li key={i} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-start gap-2"><span className="text-green-500">+</span>{strength}</li>
+                {strengths.map((strength: string, i: number) => (
+                  <li key={i} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-start gap-2">
+                    <span className="text-green-500">+</span>
+                    {strength}
+                  </li>
                 ))}
               </ul>
             </div>
           )}
           
-          {scores?.improvements && scores.improvements.length > 0 && (
+          {improvements.length > 0 && (
             <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
               <h3 className="text-lg font-medium text-amber-600 dark:text-amber-400 mb-4">Areas for Improvement</h3>
               <ul className="space-y-2">
-                {scores.improvements.map((improvement: string, i: number) => (
-                  <li key={i} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-start gap-2"><span className="text-amber-500">↑</span>{improvement}</li>
+                {improvements.map((improvement: string, i: number) => (
+                  <li key={i} className="text-sm text-zinc-600 dark:text-zinc-400 flex items-start gap-2">
+                    <span className="text-amber-500">↑</span>
+                    {improvement}
+                  </li>
                 ))}
               </ul>
             </div>

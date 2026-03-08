@@ -1,5 +1,5 @@
 import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { Phone, Users, Flag, BarChart3, Plus } from "lucide-react";
 
@@ -12,21 +12,8 @@ export default async function DashboardPage() {
     return null;
   }
   
-  const serviceSupabase = await createServiceClient();
+  const supabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
-  
-  console.log(`[DashboardPage] org_id=${orgId}`);
-  
-  // Debug: raw count
-  const { count: rawCount } = await serviceSupabase
-    .from("calls")
-    .select("*", { count: "exact", head: true });
-  
-  // Debug: org-filtered count  
-  const { count: orgCount } = await serviceSupabase
-    .from("calls")
-    .select("*", { count: "exact", head: true })
-    .eq("org_id", orgId);
   
   // Fetch stats
   const [
@@ -35,10 +22,10 @@ export default async function DashboardPage() {
     { count: flaggedCount },
     { data: recentCalls }
   ] = await Promise.all([
-    serviceSupabase.from("calls").select("*", { count: "exact", head: true }).eq("org_id", orgId),
-    serviceSupabase.from("reps").select("*", { count: "exact", head: true }).eq("org_id", orgId),
-    serviceSupabase.from("flags").select("*", { count: "exact", head: true }).eq("org_id", orgId),
-    serviceSupabase
+    supabase.from("calls").select("*", { count: "exact", head: true }).eq("org_id", orgId),
+    supabase.from("reps").select("*", { count: "exact", head: true }).eq("org_id", orgId),
+    supabase.from("flags").select("*", { count: "exact", head: true }).eq("org_id", orgId),
+    supabase
       .from("calls")
       .select("*, call_scores(*), reps!left(name)")
       .eq("org_id", orgId)
@@ -46,10 +33,8 @@ export default async function DashboardPage() {
       .limit(5)
   ]);
   
-  console.log(`[DashboardPage] raw=${rawCount}, org=${orgCount}, calls=${callsCount}, recent=${recentCalls?.length}`);
-  
   // Calculate average score
-  const { data: scores } = await serviceSupabase
+  const { data: scores } = await supabase
     .from("call_scores")
     .select("opening_score, discovery_score, rapport_score, objection_handling_score, closing_score, structure_score, product_knowledge_score")
     .in("call_id", recentCalls?.map(c => c.id) || []);
@@ -70,13 +55,6 @@ export default async function DashboardPage() {
   
   return (
     <div className="space-y-6">
-      {/* DEBUG INFO */}
-      <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-        <p className="text-sm font-mono text-yellow-800 dark:text-yellow-400">
-          DEBUG: org_id={orgId} | raw_total={rawCount} | org_total={orgCount} | calls_count={callsCount} | recent={recentCalls?.length}
-        </p>
-      </div>
-      
       <div>
         <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Overview</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Welcome back, {user.rep.name}</p>

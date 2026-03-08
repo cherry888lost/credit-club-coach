@@ -1,5 +1,5 @@
 import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { Rep } from "@/types";
 import AddRepButton from "./_components/AddRepButton";
 import { Users, UserCheck, Crown } from "lucide-react";
@@ -11,7 +11,7 @@ export default async function RepsPage() {
     return null;
   }
   
-  const supabase = await createClient();
+  const supabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
   const isAdmin = user.rep.role === "admin" || user.rep.role === "manager";
   
@@ -24,6 +24,18 @@ export default async function RepsPage() {
   if (error) {
     console.error("Error fetching reps:", error);
   }
+  
+  // Get call counts per rep
+  const { data: repStats } = await supabase
+    .from("calls")
+    .select("rep_id, count")
+    .eq("org_id", orgId)
+    .group("rep_id");
+  
+  const callCounts: Record<string, number> = {};
+  repStats?.forEach((stat: any) => {
+    callCounts[stat.rep_id] = parseInt(stat.count);
+  });
   
   const otherReps = reps?.filter(r => r.clerk_user_id !== user.userId) || [];
   
@@ -56,7 +68,7 @@ export default async function RepsPage() {
               {user.rep.role === "admin" && <Crown className="w-3.5 h-3.5 inline mr-1" />}
               {user.rep.role}
             </span>
-            <span className="px-3 py-1.5 text-sm font-medium rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 capitalize">{user.rep.status}</span>
+            <span className="text-sm text-zinc-500 dark:text-zinc-400">{callCounts[user.rep.id] || 0} calls</span>
           </div>
         </div>
       </div>
@@ -87,30 +99,21 @@ export default async function RepsPage() {
                 <div className="flex items-center gap-3">
                   <span className={`px-2.5 py-1 text-xs font-medium rounded-full capitalize ${rep.role === "admin" ? "bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400" : rep.role === "manager" ? "bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"}`}>{rep.role}</span>
                   <span className={`px-2.5 py-1 text-xs font-medium rounded-full capitalize ${rep.status === "active" ? "bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400" : rep.status === "pending" ? "bg-yellow-50 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400" : "bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400"}`}>{rep.status}</span>
+                  <span className="text-sm text-zinc-500 dark:text-zinc-400">{callCounts[rep.id] || 0} calls</span>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <EmptyState 
-            icon={<Users className="w-12 h-12" />}
-            title="No other reps yet"
-            description={isAdmin ? "You're the only team member. Add reps to start tracking everyone's calls." : "You're the only team member currently. Ask an admin to add more people."}
-          />
+          <div className="p-12 text-center">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
+              <Users className="w-12 h-12" />
+            </div>
+            <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">No other reps yet</h3>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">{isAdmin ? "You're the only team member. Add reps to start tracking everyone's calls." : "You're the only team member currently."}</p>
+          </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function EmptyState({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
-  return (
-    <div className="p-12 text-center">
-      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
-        {icon}
-      </div>
-      <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">{title}</h3>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto">{description}</p>
     </div>
   );
 }

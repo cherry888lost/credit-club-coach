@@ -1,5 +1,5 @@
 import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { BarChart3, TrendingUp, Award } from "lucide-react";
 
 export default async function AnalysisPage() {
@@ -9,7 +9,7 @@ export default async function AnalysisPage() {
     return null;
   }
   
-  const supabase = await createClient();
+  const supabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
   
   const { data: callsWithScores, error } = await supabase
@@ -22,7 +22,20 @@ export default async function AnalysisPage() {
     console.error("Error fetching calls:", error);
   }
   
-  const allScores = (callsWithScores || []).map(call => call.call_scores).filter(Boolean);
+  // Filter to only calls that have at least one score
+  const scoredCalls = (callsWithScores || []).filter(call => 
+    call.call_scores && (
+      call.call_scores.opening_score ||
+      call.call_scores.discovery_score ||
+      call.call_scores.rapport_score ||
+      call.call_scores.objection_handling_score ||
+      call.call_scores.closing_score ||
+      call.call_scores.structure_score ||
+      call.call_scores.product_knowledge_score
+    )
+  );
+  
+  const allScores = scoredCalls.map(call => call.call_scores).filter(Boolean);
   
   const avgScores = {
     opening: calculateAvg(allScores.map(s => s?.opening_score)),
@@ -39,12 +52,19 @@ export default async function AnalysisPage() {
     avgScores.closing, avgScores.structure, avgScores.product_knowledge,
   ].filter((s): s is number => s !== null));
   
+  // Parse strengths and improvements from JSON
   const allStrengths: string[] = [];
   const allImprovements: string[] = [];
   
   allScores.forEach(score => {
-    if (score?.strengths) allStrengths.push(...score.strengths);
-    if (score?.improvements) allImprovements.push(...score.improvements);
+    if (score?.strengths) {
+      const strengths = typeof score.strengths === 'string' ? JSON.parse(score.strengths) : score.strengths;
+      if (Array.isArray(strengths)) allStrengths.push(...strengths);
+    }
+    if (score?.improvements) {
+      const improvements = typeof score.improvements === 'string' ? JSON.parse(score.improvements) : score.improvements;
+      if (Array.isArray(improvements)) allImprovements.push(...improvements);
+    }
   });
   
   const strengthCounts = countFrequency(allStrengths);
@@ -53,10 +73,11 @@ export default async function AnalysisPage() {
   const topStrengths = Object.entries(strengthCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const topImprovements = Object.entries(improvementCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
   
+  // Build leaderboard
   const repScores: Record<string, { name: string; scores: number[]; count: number }> = {};
   
-  (callsWithScores || []).forEach(call => {
-    const repName = call.reps?.name || "Unknown";
+  scoredCalls.forEach(call => {
+    const repName = call.reps?.[0]?.name || "Unknown";
     if (!repScores[repName]) {
       repScores[repName] = { name: repName, scores: [], count: 0 };
     }
@@ -88,7 +109,7 @@ export default async function AnalysisPage() {
     { name: "Product Knowledge", score: avgScores.product_knowledge },
   ];
   
-  const hasData = allScores.length > 0;
+  const hasData = scoredCalls.length > 0;
   
   return (
     <div className="space-y-6">
@@ -98,11 +119,15 @@ export default async function AnalysisPage() {
       </div>
       
       {!hasData ? (
-        <EmptyState 
-          icon={<BarChart3 className="w-12 h-12" />}
-          title="No scored calls yet"
-          description="Analysis appears here once calls are scored. Connect Fathom to start importing calls, then AI scoring will analyze them automatically."
-        />
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-12 text-center">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
+            <BarChart3 className="w-12 h-12" />
+          </div>
+          <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">No scored calls yet</h3>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
+            Analysis appears here once calls are scored. Send a test webhook from Settings to create demo calls with scores.
+          </p>
+        </div>
       ) : (
         <>
           {overallAvg !== null && (
@@ -113,7 +138,7 @@ export default async function AnalysisPage() {
                   <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">Team Average</p>
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">Based on {allScores.length} scored calls across {Object.keys(repScores).length} reps</p>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400">Based on {scoredCalls.length} scored calls across {Object.keys(repScores).length} reps</p>
                 </div>
               </div>
             </div>
@@ -204,18 +229,6 @@ export default async function AnalysisPage() {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function EmptyState({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
-  return (
-    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-12 text-center">
-      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 mb-4">
-        {icon}
-      </div>
-      <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-2">{title}</h3>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">{description}</p>
     </div>
   );
 }
