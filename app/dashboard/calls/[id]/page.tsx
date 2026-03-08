@@ -21,7 +21,7 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
   
   const { data: call, error } = await supabase
     .from("calls")
-    .select("*, call_scores(*), reps(name)")
+    .select("*, call_scores(*), reps!left(name)")
     .eq("id", id)
     .eq("org_id", orgId)
     .single();

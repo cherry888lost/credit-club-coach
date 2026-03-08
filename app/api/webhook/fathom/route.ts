@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createHash, timingSafeEqual, randomUUID } from "crypto";
+import { DEFAULT_ORG_ID } from "@/lib/auth";
 
 // Force Node.js runtime for crypto support
 export const runtime = "nodejs";
@@ -202,32 +203,10 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // If no rep found, use first organization as default
+    // Use fixed default org ID for single-tenant setup
     if (!orgId) {
-      console.log(`[WEBHOOK ${requestId}] Looking for default organization`);
-      const { data: defaultOrg, error: orgError } = await supabase
-        .from("organizations")
-        .select("id")
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .single();
-      
-      if (orgError || !defaultOrg) {
-        console.error(`[WEBHOOK ${requestId}] No organization found:`, orgError?.message);
-        addLog({
-          timestamp,
-          fathom_call_id: fathomCallId,
-          event: "no_organization_error",
-          error: "No organization configured",
-        });
-        return NextResponse.json(
-          { error: "Server Error - No organization configured", requestId },
-          { status: 500 }
-        );
-      }
-      
-      orgId = defaultOrg.id;
-      console.log(`[WEBHOOK ${requestId}] Using default org ${orgId}`);
+      orgId = DEFAULT_ORG_ID;
+      console.log(`[WEBHOOK ${requestId}] Using fixed default org ${orgId}`);
     }
     
     // Check if call already exists (idempotency)

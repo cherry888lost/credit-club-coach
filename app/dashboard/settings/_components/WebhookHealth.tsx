@@ -39,7 +39,7 @@ export default function WebhookHealth() {
     try {
       const { data, error } = await supabase
         .from("calls")
-        .select("id, fathom_call_id, title, created_at, reps(name)")
+        .select("id, fathom_call_id, title, created_at, reps!left(name)")
         .order("created_at", { ascending: false })
         .limit(10);
       

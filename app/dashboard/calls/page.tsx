@@ -16,7 +16,7 @@ export default async function CallsPage() {
   
   const { data: calls, error } = await supabase
     .from("calls")
-    .select("*, call_scores(*), reps(name)")
+    .select("*, call_scores(*), reps!left(name)")
     .eq("org_id", orgId)
     .order("occurred_at", { ascending: false });
   

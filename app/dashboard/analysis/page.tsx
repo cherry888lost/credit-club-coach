@@ -14,7 +14,7 @@ export default async function AnalysisPage() {
   
   const { data: callsWithScores, error } = await supabase
     .from("calls")
-    .select("*, call_scores(*), reps(name)")
+    .select("*, call_scores(*), reps!left(name)")
     .eq("org_id", orgId)
     .not("call_scores", "is", null);
   

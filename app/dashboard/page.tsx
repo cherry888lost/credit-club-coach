@@ -25,7 +25,7 @@ export default async function DashboardPage() {
     supabase.from("flags").select("*", { count: "exact", head: true }).eq("org_id", orgId),
     supabase
       .from("calls")
-      .select("*, call_scores(*), reps(name)")
+      .select("*, call_scores(*), reps!left(name)")
       .eq("org_id", orgId)
       .order("created_at", { ascending: false })
       .limit(5)
