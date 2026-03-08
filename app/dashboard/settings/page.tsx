@@ -1,5 +1,8 @@
 import { getCurrentUser } from "@/lib/auth";
 import WebhookHealth from "./_components/WebhookHealth";
+import ResetDemoButton from "./_components/ResetDemoButton";
+
+export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const user = await getCurrentUser();
@@ -24,7 +27,7 @@ export default async function SettingsPage() {
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Team Name</label>
               <input type="text" defaultValue="Credit Club Team" disabled className="w-full max-w-md px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 cursor-not-allowed" />
-              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Single-tenant mode</p>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Single-tenant mode — team name is fixed</p>
             </div>
           </div>
         </div>
@@ -32,8 +35,16 @@ export default async function SettingsPage() {
         {isAdmin && <WebhookHealth />}
 
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+          <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Demo Data</h3>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
+            Reset all demo/test calls to start fresh. This only removes demo data created by &quot;Send Test Webhook&quot; and does not affect real Fathom webhook data.
+          </p>
+          <ResetDemoButton />
+        </div>
+
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
           <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Fathom Integration</h3>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">Calls from Fathom are automatically imported via webhook.</p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">Calls from Fathom are automatically imported via webhook. Configure your Fathom dashboard with the webhook URL shown above.</p>
           <div className="space-y-3">
             <div className="flex items-center gap-3 text-sm text-zinc-600 dark:text-zinc-400"><div className="w-2 h-2 bg-green-500 rounded-full" />Webhook endpoint active</div>
             <div className="flex items-center gap-3 text-sm text-zinc-600 dark:text-zinc-400"><div className="w-2 h-2 bg-green-500 rounded-full" />Signature verification enabled</div>
