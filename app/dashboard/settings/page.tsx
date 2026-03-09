@@ -1,6 +1,8 @@
 import { getCurrentUser } from "@/lib/auth";
+import Link from "next/link";
 import WebhookHealth from "./_components/WebhookHealth";
 import ResetDemoButton from "./_components/ResetDemoButton";
+import DiagnosticsPanel from "./_components/DiagnosticsPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -21,8 +23,23 @@ export default async function SettingsPage() {
       </div>
 
       <div className="space-y-6">
+        {isAdmin && (
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+            <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Team Management</h3>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
+              Add, edit, and manage team members from the Team page.
+            </p>
+            <Link 
+              href="/dashboard/team"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              Manage Team
+            </Link>
+          </div>
+        )}
+
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
-          <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Team</h3>
+          <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Organization</h3>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Team Name</label>
@@ -33,6 +50,13 @@ export default async function SettingsPage() {
         </div>
 
         {isAdmin && <WebhookHealth />}
+
+        {isAdmin && (
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
+            <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Diagnostics</h3>
+            <DiagnosticsPanel />
+          </div>
+        )}
 
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6">
           <h3 className="text-lg font-medium text-zinc-900 dark:text-white mb-4">Demo Data</h3>

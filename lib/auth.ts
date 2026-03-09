@@ -1,104 +1,87 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
-import { createClient, createServiceClient } from "./supabase/server";
-import type { Rep } from "@/types";
+import { createServiceClient } from "./supabase/server";
+import type { Rep, RepRole } from "@/types";
 
-// Fixed internal workspace for single-tenant setup
 export const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
+export interface CurrentUser {
+  userId: string;
+  rep: Rep | null;
+  orgId: string;
+  isOnboarded: boolean;
+  error?: string;
+}
+
 /**
- * Get or create a rep record for the current Clerk user.
- * Uses service role for all DB operations to ensure consistency.
+ * Get or create rep record for current Clerk user
  */
-async function getOrCreateRep(userId: string, email: string, name: string): Promise<{ rep: Rep | null; error: string | null }> {
-  console.log(`[getOrCreateRep] START userId=${userId}`);
-  
+async function getOrCreateRep(
+  userId: string, 
+  email: string, 
+  name: string
+): Promise<{ rep: Rep | null; error: string | null }> {
   try {
-    // Use SERVICE ROLE for everything to avoid RLS issues
-    const serviceSupabase = await createServiceClient();
+    const supabase = await createServiceClient();
     
-    // Step 1: Check if rep already exists
-    console.log(`[getOrCreateRep] Checking for existing rep...`);
-    const { data: existingRep } = await serviceSupabase
+    // Check existing
+    const { data: existing } = await supabase
       .from("reps")
       .select("*")
       .eq("clerk_user_id", userId)
       .single();
     
-    if (existingRep) {
-      console.log(`[getOrCreateRep] FOUND existing rep: ${existingRep.id}`);
-      return { rep: existingRep as Rep, error: null };
-    }
+    if (existing) return { rep: existing as Rep, error: null };
     
-    console.log(`[getOrCreateRep] No existing rep found, creating new one...`);
-    
-    // Step 2: Determine role (first user = admin)
-    const { count: repCount } = await serviceSupabase
+    // First user = admin, others = closer
+    const { count } = await supabase
       .from("reps")
       .select("*", { count: "exact", head: true });
     
-    const role = repCount === 0 ? "admin" : "closer";
+    const role: RepRole = count === 0 ? "admin" : "closer";
     
-    // Step 3: Create new rep
-    const insertPayload = {
-      org_id: DEFAULT_ORG_ID,
-      clerk_user_id: userId,
-      email,
-      name,
-      role,
-      status: "active",
-    };
-    
-    console.log(`[getOrCreateRep] Creating rep with role=${role}...`);
-    
-    const { data: newRep, error: insertError } = await serviceSupabase
+    const { data: newRep, error } = await supabase
       .from("reps")
-      .insert(insertPayload)
+      .insert({
+        org_id: DEFAULT_ORG_ID,
+        clerk_user_id: userId,
+        email: email.toLowerCase(),
+        name,
+        role,
+        status: "active",
+      })
       .select()
       .single();
     
-    if (insertError) {
-      // If unique violation, fetch the existing rep (race condition)
-      if (insertError.code === "23505") {
-        console.log(`[getOrCreateRep] 23505 conflict - fetching existing rep...`);
-        const { data: raceRep } = await serviceSupabase
+    if (error) {
+      // Handle race condition
+      if (error.code === "23505") {
+        const { data: raceRep } = await supabase
           .from("reps")
           .select("*")
           .eq("clerk_user_id", userId)
           .single();
-        
-        if (raceRep) {
-          console.log(`[getOrCreateRep] Found rep after 23505: ${raceRep.id}`);
-          return { rep: raceRep as Rep, error: null };
-        }
+        if (raceRep) return { rep: raceRep as Rep, error: null };
       }
-      
-      console.error(`[getOrCreateRep] INSERT ERROR:`, insertError);
-      return { 
-        rep: null, 
-        error: `Database error: ${insertError.message}` 
-      };
+      return { rep: null, error: error.message };
     }
     
-    console.log(`[getOrCreateRep] CREATED new rep: ${newRep?.id}`);
     return { rep: newRep as Rep, error: null };
-    
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : "Unknown error";
-    console.error(`[getOrCreateRep] EXCEPTION:`, error);
-    return { rep: null, error: errorMsg };
+  } catch (err) {
+    return { rep: null, error: err instanceof Error ? err.message : "Unknown error" };
   }
 }
 
-export async function getCurrentUser() {
+export async function getCurrentUser(): Promise<CurrentUser | null> {
   const { userId } = await auth();
-  
   if (!userId) return null;
   
   const clerkUser = await currentUser();
   if (!clerkUser) return null;
   
   const email = clerkUser.emailAddresses[0]?.emailAddress || "";
-  const name = `${clerkUser.firstName || ""} ${clerkUser.lastName || ""}`.trim() || "User";
+  const name = clerkUser.firstName && clerkUser.lastName 
+    ? `${clerkUser.firstName} ${clerkUser.lastName}`
+    : clerkUser.firstName || clerkUser.lastName || email.split("@")[0] || "User";
   
   const { rep, error } = await getOrCreateRep(userId, email, name);
   
@@ -108,7 +91,7 @@ export async function getCurrentUser() {
       rep: null,
       orgId: DEFAULT_ORG_ID,
       isOnboarded: false,
-      error: error || "Failed to load user profile",
+      error: error || "Failed to create user record",
     };
   }
   
@@ -120,9 +103,15 @@ export async function getCurrentUser() {
   };
 }
 
-export async function requireAuth() {
+export async function requireAuth(): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (!user?.userId) throw new Error("Unauthorized");
+  return user;
+}
+
+export async function requireAdmin(): Promise<CurrentUser> {
+  const user = await requireAuth();
+  if (user.rep?.role !== "admin") throw new Error("Admin access required");
   return user;
 }
 
@@ -130,6 +119,21 @@ export async function getDefaultOrgId(): Promise<string> {
   return DEFAULT_ORG_ID;
 }
 
-export async function requireOnboarding() {
+export async function requireOnboarding(): Promise<CurrentUser> {
   return requireAuth();
+}
+
+/**
+ * Check if user has required role
+ */
+export function hasRole(user: CurrentUser | null, roles: RepRole[]): boolean {
+  if (!user?.rep) return false;
+  return roles.includes(user.rep.role);
+}
+
+/**
+ * Check if user is admin
+ */
+export function isAdmin(user: CurrentUser | null): boolean {
+  return user?.rep?.role === "admin";
 }

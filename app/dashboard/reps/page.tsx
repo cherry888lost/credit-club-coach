@@ -104,8 +104,8 @@ export default async function RepsPage() {
     flaggedCount: repStats[rep.id]?.flaggedCount || 0,
   }));
   
-  const otherReps = repsWithStats.filter(r => r.id !== user.rep.id);
-  const currentUserStats = repsWithStats.find(r => r.id === user.rep.id);
+  const otherReps = repsWithStats.filter(r => r.id !== user?.rep?.id);
+  const currentUserStats = repsWithStats.find(r => r.id === user?.rep?.id);
   
   return (
     <div className="space-y-6">
@@ -185,7 +185,7 @@ export default async function RepsPage() {
                   <div className="flex items-center gap-2">
                     <span className={`px-2.5 py-1 text-xs font-medium rounded-full capitalize ${rep.role === "admin" ? "bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400" : rep.role === "manager" ? "bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"}`}>{rep.role}</span>
                     <span className={`px-2.5 py-1 text-xs font-medium rounded-full capitalize ${rep.status === "active" ? "bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400" : "bg-yellow-50 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400"}`}>{rep.status}</span>
-                    {rep.id === user.rep.id && <span className="text-xs text-indigo-600 dark:text-indigo-400">You</span>}
+                    {rep.id === user?.rep?.id && <span className="text-xs text-indigo-600 dark:text-indigo-400">You</span>}
                   </div>
                 </div>
                 
