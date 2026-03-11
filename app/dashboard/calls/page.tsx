@@ -17,7 +17,7 @@ type SearchParams = {
 export default async function CallsPage({
   searchParams,
 }: {
-  searchParams: SearchParams;
+  searchParams: Promise<SearchParams>;
 }) {
   const user = await getCurrentUser();
 
@@ -28,12 +28,17 @@ export default async function CallsPage({
   const supabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
 
-  const repFilter = (searchParams.rep as string | undefined) || undefined;
-  const roleFilter = (searchParams.role as "closer" | "sdr" | undefined) || undefined;
-  const statusFilter = (searchParams.status as "scored" | "not_scored" | "low_signal" | undefined) || undefined;
-  const outcomeFilter = (searchParams.outcome as "closed" | "follow_up" | "no_sale" | undefined) || undefined;
-  const dateFilter = (searchParams.date as "today" | "yesterday" | "this_week" | "this_month" | undefined) || undefined;
-  const sortFilter = (searchParams.sort as "newest" | "oldest" | "highest" | "lowest" | undefined) || undefined;
+  // Next.js 15+: searchParams is a Promise — must await it
+  const params = await searchParams;
+
+  const repFilter = params.rep || undefined;
+  const roleFilter = (params.role as "closer" | "sdr" | undefined) || undefined;
+  const statusFilter = (params.status as "scored" | "not_scored" | "low_signal" | undefined) || undefined;
+  const outcomeFilter = (params.outcome as "closed" | "follow_up" | "no_sale" | undefined) || undefined;
+  const dateFilter = (params.date as "today" | "yesterday" | "this_week" | "this_month" | undefined) || undefined;
+  const sortFilter = (params.sort as "newest" | "oldest" | "highest" | "lowest" | undefined) || undefined;
+
+  console.log("[CallsPage] Filters:", { repFilter, roleFilter, statusFilter, outcomeFilter, dateFilter, sortFilter });
 
   // Build date range
   const now = new Date();
@@ -66,6 +71,11 @@ export default async function CallsPage({
     .select("id, title, created_at, source, rep_id, fathom_call_id")
     .eq("org_id", orgId)
     .neq("source", "demo");
+
+  // Apply rep filter server-side
+  if (repFilter) {
+    callsQuery = callsQuery.eq("rep_id", repFilter);
+  }
 
   if (dateFrom) {
     callsQuery = callsQuery.gte("created_at", dateFrom.toISOString());
@@ -140,10 +150,7 @@ export default async function CallsPage({
     };
   });
 
-  // Apply rep filter
-  if (repFilter) {
-    calls = calls.filter((c) => c.rep_id === repFilter);
-  }
+  // Rep filter already applied server-side in Supabase query
 
   // Apply role filter
   if (roleFilter) {
