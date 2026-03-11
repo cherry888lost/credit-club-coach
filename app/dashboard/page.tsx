@@ -7,21 +7,24 @@ import {
   Flag, 
   BarChart3, 
   ArrowRight,
-  TrendingUp,
-  Trophy
+  Trophy,
+  AlertTriangle,
+  Target,
+  Hash,
+  PieChart,
+  MessageSquareWarning
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
-interface DashboardStats {
-  totalCalls: number;
-  avgScore: number | null;
-  activeReps: number;
-  totalReps: number;
-  closerCount: number;
-  sdrCount: number;
-  flaggedCalls: number;
-  topRep: { name: string; avgScore: number } | null;
+function getMonday(): string {
+  const now = new Date();
+  const day = now.getDay();
+  const diff = day === 0 ? 6 : day - 1; // Monday = 0 offset
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - diff);
+  monday.setHours(0, 0, 0, 0);
+  return monday.toISOString();
 }
 
 export default async function DashboardPage() {
@@ -33,122 +36,173 @@ export default async function DashboardPage() {
   
   const supabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
+  const weekStart = getMonday();
   
-  // Fetch all stats in parallel
-  const [
-    callsResult,
-    repsResult,
-    flaggedResult,
-    recentCallsResult,
-  ] = await Promise.all([
-    // All calls with scores
-    supabase
-      .from("calls")
-      .select(`
-        id,
-        call_scores(overall_score),
-        reps!left(name, role)
-      `)
-      .eq("org_id", orgId),
-    
-    // All active reps
-    supabase
-      .from("reps")
-      .select("id, name, role, call:calls(count)")
-      .eq("org_id", orgId)
-      .eq("status", "active"),
-    
-    // Flagged calls count
-    supabase
-      .from("flags")
-      .select("id", { count: "exact", head: true })
-      .eq("org_id", orgId),
-    
-    // Recent calls
-    supabase
-      .from("calls")
-      .select(`
-        id, title, created_at,
-        reps!left(name, role),
-        call_scores(overall_score)
-      `)
-      .eq("org_id", orgId)
-      .order("created_at", { ascending: false })
-      .limit(5),
-  ]);
+  // ── All-time queries (KPI cards) ──────────────────────────────
   
-  // Calculate stats
-  const calls = callsResult.data || [];
-  const reps = repsResult.data || [];
+  const { data: allCalls, error: callsError } = await supabase
+    .from("calls")
+    .select("id, title, created_at, source, rep_id")
+    .eq("org_id", orgId)
+    .neq("source", "demo")
+    .order("created_at", { ascending: false });
   
-  // Score calculations
-  const scores: number[] = [];
-  calls.forEach((call: any) => {
-    if (call.call_scores?.overall_score) {
-      scores.push(call.call_scores.overall_score);
-    }
-  });
+  if (callsError) {
+    console.error("[Dashboard] Calls query error:", callsError);
+  }
   
-  const avgScore = scores.length > 0 
-    ? scores.reduce((a, b) => a + b, 0) / scores.length 
+  const { data: repsData } = await supabase
+    .from("reps")
+    .select("id, name, email, role, sales_role");
+  
+  const repMap = new Map(repsData?.map(r => [r.id, r]) || []);
+  
+  const { data: allScoresData } = await supabase
+    .from("call_scores")
+    .select("call_id, overall_score");
+  
+  const scoreMap = new Map(allScoresData?.map(s => [s.call_id, s.overall_score]) || []);
+  
+  const { count: flaggedCount } = await supabase
+    .from("flags")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId);
+  
+  // Process all-time stats
+  const calls = allCalls || [];
+  const scoredCallsAll = calls.filter(c => scoreMap.has(c.id));
+  const scoresAll = scoredCallsAll.map(c => scoreMap.get(c.id)).filter(Boolean) as number[];
+  const avgScoreAll = scoresAll.length > 0 
+    ? scoresAll.reduce((a, b) => a + b, 0) / scoresAll.length 
     : null;
   
-  // Rep stats for leaderboard
-  const repScores: Record<string, { name: string; scores: number[] }> = {};
+  const closerCount = repsData?.filter(r => r.sales_role === "closer").length || 0;
+  const sdrCount = repsData?.filter(r => r.sales_role === "sdr").length || 0;
   
-  calls.forEach((call: any) => {
-    const repId = call.reps?.id;
-    const repName = call.reps?.name;
-    const score = call.call_scores?.overall_score;
+  // ── This-week queries (At a Glance) ──────────────────────────
+  
+  // Get call IDs for this week
+  const weekCallIds = calls
+    .filter(c => c.created_at >= weekStart)
+    .map(c => c.id);
+  
+  // Build a map of call_id -> rep_id for this week's calls
+  const weekCallRepMap = new Map(
+    calls.filter(c => c.created_at >= weekStart).map(c => [c.id, c.rep_id])
+  );
+  
+  // Fetch scores + outcomes for this week's calls
+  let weekScores: Array<{
+    call_id: string;
+    overall_score: number | null;
+    outcome: string | null;
+    manual_outcome: string | null;
+    low_signal: boolean | null;
+    weaknesses: string[] | null;
+    objections_detected: string[] | null;
+  }> = [];
+  
+  if (weekCallIds.length > 0) {
+    const { data } = await supabase
+      .from("call_scores")
+      .select("call_id, overall_score, outcome, manual_outcome, low_signal, weaknesses, objections_detected")
+      .in("call_id", weekCallIds);
+    weekScores = data || [];
+  }
+  
+  // Team Score This Week
+  const weekScoresValues = weekScores
+    .map(s => s.overall_score)
+    .filter((v): v is number => v != null);
+  const teamScoreWeek = weekScoresValues.length > 0
+    ? weekScoresValues.reduce((a, b) => a + b, 0) / weekScoresValues.length
+    : null;
+  
+  // Scored Calls count
+  const scoredCallsWeek = weekScoresValues.length;
+  
+  // Outcome Breakdown
+  let closedCount = 0;
+  let followUpCount = 0;
+  let noSaleCount = 0;
+  
+  for (const s of weekScores) {
+    const outcome = s.manual_outcome || s.outcome;
+    if (!outcome) continue;
+    if (outcome === "closed") closedCount++;
+    else if (outcome === "follow_up") followUpCount++;
+    else if (outcome === "no_sale") noSaleCount++;
+  }
+  
+  // Per-rep averages this week (min 3 calls)
+  const repWeekScores: Record<string, { name: string; scores: number[] }> = {};
+  
+  for (const s of weekScores) {
+    if (s.overall_score == null) continue;
+    const repId = weekCallRepMap.get(s.call_id);
+    if (!repId) continue;
+    const rep = repMap.get(repId);
+    if (!rep) continue;
     
-    if (repId && repName && score) {
-      if (!repScores[repId]) {
-        repScores[repId] = { name: repName, scores: [] };
-      }
-      repScores[repId].scores.push(score);
+    if (!repWeekScores[repId]) {
+      repWeekScores[repId] = { name: rep.name, scores: [] };
     }
-  });
+    repWeekScores[repId].scores.push(s.overall_score);
+  }
   
-  // Find top rep
-  let topRep: { name: string; avgScore: number } | null = null;
+  let topPerformer: { name: string; avg: number; count: number } | null = null;
+  let needsReview: { name: string; avg: number; count: number } | null = null;
   
-  Object.values(repScores).forEach((rep: any) => {
-    if (rep.scores.length > 0) {
-      const repAvg = rep.scores.reduce((a: number, b: number) => a + b, 0) / rep.scores.length;
-      if (!topRep || repAvg > topRep.avgScore) {
-        topRep = { name: rep.name, avgScore: repAvg };
+  for (const [, rep] of Object.entries(repWeekScores)) {
+    if (rep.scores.length < 3) continue;
+    const avg = rep.scores.reduce((a, b) => a + b, 0) / rep.scores.length;
+    
+    if (!topPerformer || avg > topPerformer.avg) {
+      topPerformer = { name: rep.name, avg, count: rep.scores.length };
+    }
+    if (!needsReview || avg < needsReview.avg) {
+      needsReview = { name: rep.name, avg, count: rep.scores.length };
+    }
+  }
+  
+  // If top and bottom are the same person, clear needsReview
+  if (topPerformer && needsReview && topPerformer.name === needsReview.name) {
+    needsReview = null;
+  }
+  
+  // Common Objections - top 3
+  const objectionCounts: Record<string, number> = {};
+  for (const s of weekScores) {
+    if (!s.objections_detected) continue;
+    for (const obj of s.objections_detected) {
+      const normalized = obj.trim().toLowerCase();
+      if (normalized) {
+        objectionCounts[normalized] = (objectionCounts[normalized] || 0) + 1;
       }
     }
-  });
+  }
   
-  // Count by role
-  const closerCount = reps.filter((r: any) => r.role === "closer").length;
-  const sdrCount = reps.filter((r: any) => r.role === "sdr").length;
-  
-  const stats: DashboardStats = {
-    totalCalls: calls.length,
-    avgScore,
-    activeReps: reps.length,
-    totalReps: reps.length,
-    closerCount,
-    sdrCount,
-    flaggedCalls: flaggedResult.count || 0,
-    topRep,
-  };
-  
-  const recentCalls = recentCallsResult.data || [];
+  const topObjections = Object.entries(objectionCounts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 3)
+    .map(([objection, count]) => ({ 
+      objection: objection.charAt(0).toUpperCase() + objection.slice(1), 
+      count 
+    }));
   
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Overview</h1>
-          <p className="text-zinc-400 mt-1">Welcome back, {user.rep.name}</p>
+          <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Overview</h1>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+            Welcome back, {user.rep.name}
+          </p>
         </div>
         <Link 
           href="/dashboard/calls"
-          className="flex items-center gap-2 text-indigo-400 hover:text-indigo-300 transition-colors"
+          className="flex items-center gap-2 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition-colors"
         >
           View all calls
           <ArrowRight className="w-4 h-4" />
@@ -157,183 +211,275 @@ export default async function DashboardPage() {
       
       {/* KPI Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          icon={<Phone className="w-5 h-5" />}
+        <KpiCard
+          icon={<Phone className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
           label="Total Calls"
-          value={stats.totalCalls.toString()}
+          value={calls.length.toString()}
           href="/dashboard/calls"
         />
-        <StatCard
-          icon={<BarChart3 className="w-5 h-5" />}
+        <KpiCard
+          icon={<BarChart3 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
           label="Avg Score"
-          value={stats.avgScore?.toFixed(1) || "-"}
-          color={stats.avgScore && stats.avgScore >= 8 ? "green" : stats.avgScore && stats.avgScore < 7 ? "red" : "default"}
+          value={avgScoreAll?.toFixed(1) || "—"}
+          valueColor={
+            avgScoreAll != null && avgScoreAll >= 8 ? "text-green-700 dark:text-green-400" : 
+            avgScoreAll != null && avgScoreAll < 7 ? "text-red-700 dark:text-red-400" : 
+            undefined
+          }
         />
-        <StatCard
-          icon={<Users className="w-5 h-5" />}
+        <KpiCard
+          icon={<Users className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
           label="Team"
-          value={`${stats.activeReps}`}
-          subtext={`${stats.closerCount} closers, ${stats.sdrCount} SDRs`}
-          href="/dashboard/team"
+          value={`${repsData?.length || 0}`}
+          subtext={`${closerCount} closers · ${sdrCount} SDRs`}
+          href="/dashboard/reps"
         />
-        <StatCard
-          icon={<Flag className="w-5 h-5" />}
+        <KpiCard
+          icon={<Flag className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
           label="Flagged"
-          value={stats.flaggedCalls.toString()}
-          color={stats.flaggedCalls > 0 ? "red" : "default"}
+          value={(flaggedCount || 0).toString()}
+          valueColor={flaggedCount && flaggedCount > 0 ? "text-red-700 dark:text-red-400" : undefined}
         />
       </div>
       
-      {/* Role Split & Top Rep */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Users className="w-5 h-5 text-indigo-400" />
-            <h3 className="font-semibold text-white">Team Composition</h3>
-          </div>          
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-zinc-400">Closers</span>
-              <div className="flex items-center gap-3">
-                <div className="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-blue-500 rounded-full" 
-                    style={{ width: `${stats.activeReps > 0 ? (stats.closerCount / stats.activeReps) * 100 : 0}%` }}
-                  />
-                </div>
-                <span className="text-white font-medium w-8">{stats.closerCount}</span>
+      {/* At a Glance */}
+      <div>
+        <h2 className="text-sm font-semibold text-zinc-900 dark:text-white mb-4">
+          At a Glance — This Week
+        </h2>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Left Column */}
+          <div className="space-y-4">
+            {/* Team Score This Week */}
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Target className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  Team Score
+                </span>
               </div>
-            </div>            
-            <div className="flex items-center justify-between">
-              <span className="text-zinc-400">SDRs</span>
-              <div className="flex items-center gap-3">
-                <div className="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-purple-500 rounded-full" 
-                    style={{ width: `${stats.activeReps > 0 ? (stats.sdrCount / stats.activeReps) * 100 : 0}%` }}
-                  />
-                </div>
-                <span className="text-white font-medium w-8">{stats.sdrCount}</span>
+              {teamScoreWeek != null ? (
+                <p className={`text-3xl font-bold ${
+                  teamScoreWeek >= 8 ? "text-green-700 dark:text-green-400" :
+                  teamScoreWeek < 7 ? "text-red-700 dark:text-red-400" :
+                  "text-zinc-900 dark:text-white"
+                }`}>
+                  {teamScoreWeek.toFixed(1)}
+                </p>
+              ) : (
+                <p className="text-3xl font-bold text-zinc-300 dark:text-zinc-600">—</p>
+              )}
+              <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
+                Average across all scored calls
+              </p>
+            </div>
+            
+            {/* Scored Calls */}
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Hash className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  Scored Calls
+                </span>
+              </div>
+              <p className="text-3xl font-bold text-zinc-900 dark:text-white">
+                {scoredCallsWeek}
+              </p>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
+                {weekCallIds.length} total calls this week
+              </p>
+            </div>
+            
+            {/* Outcome Breakdown */}
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <PieChart className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  Outcome Breakdown
+                </span>
+              </div>
+              <div className="space-y-3">
+                <OutcomeRow label="Closed" count={closedCount} color="green" />
+                <OutcomeRow label="Follow-up" count={followUpCount} color="amber" />
+                <OutcomeRow label="No Sale" count={noSaleCount} color="red" />
               </div>
             </div>
           </div>
-        </div>        
-        <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Trophy className="w-5 h-5 text-yellow-400" />
-            <h3 className="font-semibold text-white">Top Performer</h3>
-          </div>          
-          {stats.topRep ? (
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xl font-bold text-white">{stats.topRep.name}</p>
-                <p className="text-zinc-400 text-sm">Highest average score</p>
+          
+          {/* Right Column */}
+          <div className="space-y-4">
+            {/* Top Performer */}
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Trophy className="w-4 h-4 text-yellow-500" />
+                <span className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  Top Performer
+                </span>
               </div>
-              <div className={`text-3xl font-bold ${
-                stats.topRep.avgScore >= 8 ? "text-green-400" : 
-                stats.topRep.avgScore < 7 ? "text-red-400" : "text-white"
-              }`}>
-                {stats.topRep.avgScore.toFixed(1)}
-              </div>
-            </div>
-          ) : (
-            <p className="text-zinc-500">No scored calls yet</p>
-          )}
-        </div>
-      </div>
-      
-      {/* Recent Calls */}
-      <div className="bg-zinc-900 rounded-xl border border-zinc-800">
-        <div className="p-5 border-b border-zinc-800">
-          <h2 className="font-semibold text-white">Recent Calls</h2>
-        </div>        
-        {recentCalls.length > 0 ? (
-          <div className="divide-y divide-zinc-800">
-            {recentCalls.map((call: any) => {
-              const score = call.call_scores?.overall_score;
-              const repRole = call.reps?.role;
-              
-              return (
-                <Link 
-                  key={call.id}
-                  href={`/dashboard/calls/${call.id}`}
-                  className="flex items-center justify-between p-4 hover:bg-zinc-800/50 transition-colors"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium text-white truncate">{call.title || "Untitled Call"}</p>
-                      {repRole && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          repRole === 'closer' ? "bg-blue-500/20 text-blue-400" : "bg-purple-500/20 text-purple-400"
-                        }`}>
-                          {repRole.toUpperCase()}
-                        </span>
-                      )}
-                    </div>                    
-                    <p className="text-sm text-zinc-500">
-                      {call.reps?.name || "Unassigned"} • {new Date(call.created_at).toLocaleDateString()}
-                    </p>
-                  </div>                  
+              {topPerformer ? (
+                <div className="flex items-center justify-between">
                   <div>
-                    {score ? (
-                      <span className={`px-3 py-1 rounded-lg text-sm font-bold ${
-                        score >= 8 ? "bg-green-500/20 text-green-400" : 
-                        score < 7 ? "bg-red-500/20 text-red-400" : 
-                        "bg-zinc-800 text-zinc-300"
-                      }`}>
-                        {score.toFixed(1)}
-                      </span>
-                    ) : (
-                      <span className="text-zinc-500 text-sm">Not scored</span>
-                    )}
+                    <p className="text-lg font-bold text-zinc-900 dark:text-white">{topPerformer.name}</p>
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      {topPerformer.count} calls scored
+                    </p>
                   </div>
-                </Link>
-              );
-            })}
+                  <p className={`text-3xl font-bold ${
+                    topPerformer.avg >= 8 ? "text-green-700 dark:text-green-400" :
+                    topPerformer.avg < 7 ? "text-red-700 dark:text-red-400" :
+                    "text-zinc-900 dark:text-white"
+                  }`}>
+                    {topPerformer.avg.toFixed(1)}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  Need at least 3 scored calls to rank
+                </p>
+              )}
+            </div>
+            
+            {/* Needs Review */}
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <AlertTriangle className="w-4 h-4 text-amber-500" />
+                <span className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  Needs Review
+                </span>
+              </div>
+              {needsReview ? (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-lg font-bold text-zinc-900 dark:text-white">{needsReview.name}</p>
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      {needsReview.count} calls scored
+                    </p>
+                  </div>
+                  <p className={`text-3xl font-bold ${
+                    needsReview.avg < 7 ? "text-red-700 dark:text-red-400" :
+                    "text-amber-700 dark:text-amber-400"
+                  }`}>
+                    {needsReview.avg.toFixed(1)}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  Need at least 2 reps with 3+ scored calls
+                </p>
+              )}
+            </div>
+            
+            {/* Common Objections */}
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <MessageSquareWarning className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  Common Objections
+                </span>
+              </div>
+              {topObjections.length > 0 ? (
+                <div className="space-y-3">
+                  {topObjections.map((obj, i) => (
+                    <div key={i} className="flex items-center justify-between">
+                      <span className="text-sm text-zinc-600 dark:text-zinc-400 truncate mr-3">
+                        {obj.objection}
+                      </span>
+                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 shrink-0">
+                        {obj.count}×
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  No objections recorded this week
+                </p>
+              )}
+            </div>
           </div>
-        ) : (
-          <div className="p-12 text-center">
-            <TrendingUp className="w-12 h-12 text-zinc-700 mx-auto mb-3" />
-            <p className="text-zinc-500">No calls yet. Send a test webhook to get started.</p>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );
 }
 
-function StatCard({ 
+/* ── Reusable components ─────────────────────────────────────── */
+
+function KpiCard({ 
   icon, 
   label, 
   value, 
   subtext,
-  color = "default",
+  valueColor,
   href,
 }: { 
   icon: React.ReactNode; 
   label: string; 
   value: string;
   subtext?: string;
-  color?: "green" | "red" | "default";
+  valueColor?: string;
   href?: string;
 }) {
-  const colors = {
-    green: "bg-green-500/10 border-green-500/20",
-    red: "bg-red-500/10 border-red-500/20",
-    default: "bg-zinc-900 border-zinc-800",
-  };
-  
   const content = (
-    <div className={`p-5 rounded-xl border ${colors[color]} ${href ? "hover:border-zinc-700 transition-colors cursor-pointer" : ""}`}>
-      <div className="flex items-center gap-2 text-zinc-400 mb-2">
+    <div className={`bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow p-5 h-full ${href ? "cursor-pointer" : ""}`}>
+      <div className="flex items-center gap-2 mb-2">
         {icon}
-        <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
-      </div>      
-      <p className="text-3xl font-bold text-white">{value}</p>      
-      {subtext && <p className="text-xs text-zinc-500 mt-1">{subtext}</p>}
+        <span className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+          {label}
+        </span>
+      </div>
+      <p className={`text-3xl font-bold ${valueColor || "text-zinc-900 dark:text-white"}`}>
+        {value}
+      </p>
+      {subtext && (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{subtext}</p>
+      )}
     </div>
   );
   
   if (href) return <Link href={href}>{content}</Link>;
   return content;
+}
+
+function OutcomeRow({ 
+  label, 
+  count, 
+  color 
+}: { 
+  label: string; 
+  count: number; 
+  color: "green" | "amber" | "red" 
+}) {
+  const styles = {
+    green: {
+      bg: "bg-green-50 dark:bg-green-900/20",
+      text: "text-green-700 dark:text-green-400",
+      dot: "bg-green-500",
+    },
+    amber: {
+      bg: "bg-amber-50 dark:bg-amber-900/20",
+      text: "text-amber-700 dark:text-amber-400",
+      dot: "bg-amber-500",
+    },
+    red: {
+      bg: "bg-red-50 dark:bg-red-900/20",
+      text: "text-red-700 dark:text-red-400",
+      dot: "bg-red-500",
+    },
+  };
+  
+  const s = styles[color];
+  
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <span className={`w-2 h-2 rounded-full ${s.dot}`} />
+        <span className="text-sm text-zinc-600 dark:text-zinc-400">{label}</span>
+      </div>
+      <span className={`text-sm font-semibold px-2.5 py-0.5 rounded-full ${s.bg} ${s.text}`}>
+        {count}
+      </span>
+    </div>
+  );
 }

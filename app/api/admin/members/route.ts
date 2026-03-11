@@ -26,13 +26,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Admin access required" }, { status: 403 });
     }
 
-    // Get all reps with stats
+    // Get all reps with call stats
     const { data: reps, error } = await serviceSupabase
       .from("reps")
       .select(`
         *,
-        calls:calls(count),
-        call_scores!inner(overall_score)
+        calls:calls(count)
       `)
       .eq("org_id", DEFAULT_ORG_ID)
       .order("created_at", { ascending: false });
@@ -42,9 +41,31 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    // Get scores separately to avoid relation issues
+    const { data: allScores } = await serviceSupabase
+      .from("call_scores")
+      .select("call_id, overall_score, calls!inner(rep_id)")
+      .in("call_id", 
+        (await serviceSupabase
+          .from("calls")
+          .select("id")
+          .eq("org_id", DEFAULT_ORG_ID)
+        ).data?.map(c => c.id) || []
+      );
+
+    // Calculate scores per rep
+    const scoresByRep: Record<string, number[]> = {};
+    allScores?.forEach((score: any) => {
+      const repId = score.calls?.rep_id;
+      if (repId) {
+        if (!scoresByRep[repId]) scoresByRep[repId] = [];
+        if (score.overall_score) scoresByRep[repId].push(score.overall_score);
+      }
+    });
+
     // Process stats
     const members = reps?.map((rep: any) => {
-      const scores = rep.call_scores?.map((s: any) => s.overall_score).filter((s: number | null) => s !== null) || [];
+      const scores = scoresByRep[rep.id] || [];
       const avgScore = scores.length > 0 
         ? scores.reduce((a: number, b: number) => a + b, 0) / scores.length 
         : null;
@@ -59,6 +80,7 @@ export async function GET(request: NextRequest) {
         clerk_user_id: rep.clerk_user_id,
         created_at: rep.created_at,
         updated_at: rep.updated_at,
+        sales_role: rep.sales_role,
         stats: {
           call_count: rep.calls?.[0]?.count || 0,
           avg_score: avgScore,
@@ -98,14 +120,30 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, email, role, fathom_email } = body;
+    const { name, email, role, sales_role, fathom_email } = body;
 
     if (!name || !email || !role) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    if (!['closer', 'sdr'].includes(role)) {
+    if (!['admin', 'closer', 'sdr'].includes(role)) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+    }
+    
+    // Validate sales_role if provided
+    if (sales_role && !['closer', 'sdr'].includes(sales_role)) {
+      return NextResponse.json({ error: "Invalid sales_role" }, { status: 400 });
+    }
+
+    // Check if email already exists
+    const { data: existing } = await serviceSupabase
+      .from("reps")
+      .select("id")
+      .eq("email", email.toLowerCase())
+      .single();
+
+    if (existing) {
+      return NextResponse.json({ error: "A member with this email already exists" }, { status: 409 });
     }
 
     // Create user in Clerk
@@ -117,7 +155,7 @@ export async function POST(request: NextRequest) {
         emailAddress: [email],
         firstName: name.split(' ')[0],
         lastName: name.split(' ').slice(1).join(' ') || undefined,
-        password: generateTempPassword(), // Generate secure temp password
+        password: generateTempPassword(),
         skipPasswordChecks: false,
         publicMetadata: {
           role: role,
@@ -142,6 +180,7 @@ export async function POST(request: NextRequest) {
         fathom_email: fathom_email?.toLowerCase() || null,
         name,
         role,
+        sales_role: sales_role || null,
         status: "active",
       })
       .select()
@@ -149,18 +188,19 @@ export async function POST(request: NextRequest) {
 
     if (repError) {
       // Rollback: delete Clerk user
-      await clerk.users.deleteUser(clerkUser.id);
+      try {
+        await clerk.users.deleteUser(clerkUser.id);
+      } catch (e) {
+        console.error("[ADMIN_MEMBERS] Failed to rollback Clerk user:", e);
+      }
       console.error("[ADMIN_MEMBERS] Supabase insert error:", repError);
       return NextResponse.json({ error: repError.message }, { status: 500 });
     }
 
-    // Note: Password reset email can be triggered from frontend Clerk components
-    // or via Clerk Dashboard. Skipping backend password reset for now.
-
     return NextResponse.json({
       success: true,
       member: newRep,
-      message: "Member created successfully. User can set password via reset link at login.",
+      message: "Member created successfully. They can set their password using the forgot password link.",
     });
 
   } catch (error) {
@@ -172,7 +212,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PATCH /api/admin/members/[id] - Update member
+// PATCH /api/admin/members - Update member
 export async function PATCH(request: NextRequest) {
   try {
     const { userId: adminId } = await auth();
@@ -194,10 +234,24 @@ export async function PATCH(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { id, name, email, fathom_email, role, status } = body;
+    const { id, name, email, fathom_email, role, sales_role, status } = body;
 
     if (!id) {
       return NextResponse.json({ error: "Member ID required" }, { status: 400 });
+    }
+
+    // Check for email conflict if changing email
+    if (email) {
+      const { data: existing } = await serviceSupabase
+        .from("reps")
+        .select("id")
+        .eq("email", email.toLowerCase())
+        .neq("id", id)
+        .single();
+
+      if (existing) {
+        return NextResponse.json({ error: "Another member already uses this email" }, { status: 409 });
+      }
     }
 
     // Build update object
@@ -206,6 +260,7 @@ export async function PATCH(request: NextRequest) {
     if (email) updates.email = email.toLowerCase();
     if (fathom_email !== undefined) updates.fathom_email = fathom_email?.toLowerCase() || null;
     if (role) updates.role = role;
+    if (sales_role !== undefined) updates.sales_role = sales_role;
     if (status) updates.status = status;
 
     // Update in Supabase
@@ -249,7 +304,7 @@ export async function PATCH(request: NextRequest) {
   }
 }
 
-// DELETE /api/admin/members/[id] - Soft delete (deactivate) member
+// DELETE /api/admin/members - Soft delete (deactivate) member
 export async function DELETE(request: NextRequest) {
   try {
     const { userId: adminId } = await auth();
@@ -281,9 +336,14 @@ export async function DELETE(request: NextRequest) {
     // Get member before deletion
     const { data: member } = await serviceSupabase
       .from("reps")
-      .select("clerk_user_id, name")
+      .select("clerk_user_id, name, role")
       .eq("id", id)
       .single();
+
+    // Prevent self-deletion
+    if (member?.clerk_user_id === adminId) {
+      return NextResponse.json({ error: "Cannot delete yourself" }, { status: 400 });
+    }
 
     if (hardDelete && member?.clerk_user_id) {
       // Hard delete: remove from Clerk

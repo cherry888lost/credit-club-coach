@@ -1,343 +1,957 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { DEFAULT_ORG_ID } from "@/lib/auth";
-import { createHash } from "crypto";
+import { Webhook } from "svix";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Fathom webhook handler
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
-  const timestamp = new Date().toISOString();
+  const receivedAt = new Date().toISOString();
+
+  // ============================================
+  // EARLY ARRIVAL LOGGING - Before any processing
+  // ============================================
+  const headerNames = Array.from(request.headers.keys());
+  const contentType = request.headers.get("content-type");
+  const userAgent = request.headers.get("user-agent");
   
-  console.log(`[FATHOM_WEBHOOK ${requestId}] Received webhook at ${timestamp}`);
+  // Check for Svix-style headers (Fathom uses Svix for webhooks)
+  const webhookId = request.headers.get("webhook-id");
+  const webhookSignature = request.headers.get("webhook-signature");
+  const webhookTimestamp = request.headers.get("webhook-timestamp");
+  
+  // Read raw body immediately for length logging
+  const rawBody = await request.text();
+  
+  const earlyDiagnostics = {
+    debugVersion: "FATHOM-SVIX-FIX-V1",
+    request_received: true,
+    method: request.method,
+    content_type: contentType,
+    user_agent: userAgent,
+    has_webhook_id: !!webhookId,
+    has_webhook_signature: !!webhookSignature,
+    has_webhook_timestamp: !!webhookTimestamp,
+    header_names: headerNames,
+    raw_body_length: rawBody.length,
+    received_at: receivedAt,
+    failure_stage: null as string | null,
+  };
+
+  console.log(`[WEBHOOK ${requestId}] ========================================`);
+  console.log(`[WEBHOOK ${requestId}] EARLY ARRIVAL LOG`, earlyDiagnostics);
+  console.log(`[WEBHOOK ${requestId}] ========================================`);
+
+  const trace = {
+    request_id: requestId,
+    received_at: receivedAt,
+    source_detected: null as string | null,
+    processing: {} as any,
+    result: null as any,
+    early_diagnostics: earlyDiagnostics,
+  };
 
   try {
-    // Get raw body for signature verification
-    const rawBody = await request.text();
-    const signature = request.headers.get("X-Fathom-Signature");
-
-    if (!signature) {
-      console.error(`[FATHOM_WEBHOOK ${requestId}] Missing signature`);
-      await logWebhook(DEFAULT_ORG_ID, "fathom", "signature_missing", { error: "Missing signature" }, "error");
-      return NextResponse.json({ error: "Unauthorized - Missing signature" }, { status: 401 });
-    }
-
-    // Verify signature
-    const secret = process.env.FATHOM_WEBHOOK_SECRET;
-    if (!secret) {
-      console.error(`[FATHOM_WEBHOOK ${requestId}] FATHOM_WEBHOOK_SECRET not configured`);
-      return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
-    }
-
-    const expectedSignature = createHash("sha256").update(rawBody + secret).digest("hex");
+    // Parse body
+    let payload: any;
     
-    if (signature !== expectedSignature) {
-      console.error(`[FATHOM_WEBHOOK ${requestId}] Invalid signature`);
-      await logWebhook(DEFAULT_ORG_ID, "fathom", "invalid_signature", { error: "Signature mismatch" }, "error");
-      return NextResponse.json({ error: "Unauthorized - Invalid signature" }, { status: 401 });
-    }
-
-    // Parse webhook payload
-    let payload;
     try {
       payload = JSON.parse(rawBody);
-    } catch (e) {
-      console.error(`[FATHOM_WEBHOOK ${requestId}] JSON parse error:`, e);
-      await logWebhook(DEFAULT_ORG_ID, "fathom", "parse_error", { error: "Invalid JSON" }, "error");
-      return NextResponse.json({ error: "Bad Request - Invalid JSON" }, { status: 400 });
+    } catch (err: any) {
+      console.error(`[WEBHOOK ${requestId}] JSON PARSE ERROR:`, err.message);
+      trace.early_diagnostics.failure_stage = "payload_parse";
+      await logDiagnostics(requestId, trace.early_diagnostics);
+      return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
     }
 
-    console.log(`[FATHOM_WEBHOOK ${requestId}] Event type: ${payload.event_type}`);
-
-    // Only process completed/processed recordings
-    if (!["recording.completed", "recording.processed", "meeting.ended"].includes(payload.event_type)) {
-      console.log(`[FATHOM_WEBHOOK ${requestId}] Ignoring event type: ${payload.event_type}`);
-      return NextResponse.json({ success: true, message: "Event type ignored" });
-    }
-
-    const serviceSupabase = await createServiceClient();
-
-    // Check for duplicate
-    const fathomCallId = payload.data?.id || payload.recording_id || payload.meeting_id;
-    if (fathomCallId) {
-      const { data: existing } = await serviceSupabase
-        .from("calls")
-        .select("id")
-        .eq("fathom_call_id", fathomCallId)
-        .single();
-
-      if (existing) {
-        console.log(`[FATHOM_WEBHOOK ${requestId}] Duplicate call: ${fathomCallId}`);
-        return NextResponse.json({ success: true, message: "Call already exists", callId: existing.id });
-      }
-    }
-
-    // Fetch full recording data from Fathom API
-    const fathomApiKey = process.env.FATHOM_API_KEY;
-    if (!fathomApiKey) {
-      console.error(`[FATHOM_WEBHOOK ${requestId}] FATHOM_API_KEY not configured`);
-      return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
-    }
-
-    let recordingData = payload.data;
+    // SOURCE DETECTION - Svix headers take priority
+    let sourceDetected: "zapier" | "fathom_direct";
     
-    // If we have a recording_id but limited data, fetch full details
-    const recordingId = payload.data?.recording_id || payload.recording_id || fathomCallId;
-    if (recordingId && (!recordingData?.transcript || !recordingData?.summary)) {
-      console.log(`[FATHOM_WEBHOOK ${requestId}] Fetching full recording data from Fathom API`);
-      
-      try {
-        const fathomResponse = await fetch(`https://api.fathom.video/v1/recordings/${recordingId}`, {
-          headers: {
-            "Authorization": `Bearer ${fathomApiKey}`,
-            "Content-Type": "application/json",
-          },
-        });
+    if (webhookId && webhookSignature && webhookTimestamp) {
+      // Svix-style Fathom direct webhook (check FIRST - takes priority)
+      sourceDetected = "fathom_direct";
+    } else if (payload.source === "zapier") {
+      // Explicit Zapier marker
+      sourceDetected = "zapier";
+    } else if (payload.event_type?.includes("recording") || payload.transcript || payload.summary) {
+      // Direct Fathom webhook (fallback detection)
+      sourceDetected = "fathom_direct";
+    } else {
+      // Default to fathom_direct for unknown sources
+      sourceDetected = "fathom_direct";
+    }
+    
+    trace.source_detected = sourceDetected;
+    console.log(`[WEBHOOK ${requestId}] SOURCE DETECTED: ${sourceDetected}`);
+    console.log(`[WEBHOOK ${requestId}] Payload keys: ${Object.keys(payload).join(", ")}`);
 
-        if (fathomResponse.ok) {
-          const fullData = await fathomResponse.json();
-          recordingData = { ...recordingData, ...fullData };
-        } else {
-          console.error(`[FATHOM_WEBHOOK ${requestId}] Fathom API error: ${fathomResponse.status}`);
-        }
-      } catch (err) {
-        console.error(`[FATHOM_WEBHOOK ${requestId}] Error fetching from Fathom:`, err);
-      }
+    // Route based on source
+    if (sourceDetected === "zapier") {
+      return await processZapierWebhook(requestId, payload, trace);
+    } else {
+      return await processFathomDirectWebhook(requestId, payload, rawBody, request, trace);
     }
 
-    // Extract host email
-    const hostEmail = recordingData?.host?.email || recordingData?.host_email || payload.host_email;
-    console.log(`[FATHOM_WEBHOOK ${requestId}] Host email: ${hostEmail}`);
-
-    // Match rep by email
-    let repId: string | null = null;
-    let matchedRepName: string | null = null;
-
-    if (hostEmail) {
-      // Try fathom_email first, then email
-      const { data: repByFathomEmail } = await serviceSupabase
-        .from("reps")
-        .select("id, name")
-        .eq("org_id", DEFAULT_ORG_ID)
-        .eq("fathom_email", hostEmail.toLowerCase())
-        .eq("status", "active")
-        .single();
-
-      if (repByFathomEmail) {
-        repId = repByFathomEmail.id;
-        matchedRepName = repByFathomEmail.name;
-        console.log(`[FATHOM_WEBHOOK ${requestId}] Matched by fathom_email: ${matchedRepName}`);
-      } else {
-        // Try regular email
-        const { data: repByEmail } = await serviceSupabase
-          .from("reps")
-          .select("id, name")
-          .eq("org_id", DEFAULT_ORG_ID)
-          .eq("email", hostEmail.toLowerCase())
-          .eq("status", "active")
-          .single();
-
-        if (repByEmail) {
-          repId = repByEmail.id;
-          matchedRepName = repByEmail.name;
-          console.log(`[FATHOM_WEBHOOK ${requestId}] Matched by email: ${matchedRepName}`);
-        }
-      }
-    }
-
-    if (!repId) {
-      console.warn(`[FATHOM_WEBHOOK ${requestId}] No rep matched for email: ${hostEmail}`);
-    }
-
-    // Create call record
-    const callData = {
-      org_id: DEFAULT_ORG_ID,
-      rep_id: repId,
-      fathom_call_id: recordingId || fathomCallId,
-      title: recordingData?.title || recordingData?.name || `${matchedRepName || 'Unknown'} - Call`,
-      occurred_at: recordingData?.started_at || recordingData?.created_at || timestamp,
-      duration_seconds: recordingData?.duration_seconds || recordingData?.duration,
-      transcript: recordingData?.transcript || recordingData?.transcript_text,
-      summary: recordingData?.summary || recordingData?.ai_summary,
-      recording_url: recordingData?.recording_url || recordingData?.audio_url,
-      video_url: recordingData?.video_url,
-      host_email: hostEmail?.toLowerCase(),
-      participants: recordingData?.participants?.map((p: any) => p.email || p.name) || [],
-      source: "fathom" as const,
-      metadata: {
-        ...recordingData,
-        webhook_event: payload.event_type,
-        webhook_id: requestId,
-        matched_rep: matchedRepName,
-        matched_rep_id: repId,
-      },
-    };
-
-    const { data: newCall, error: callError } = await serviceSupabase
-      .from("calls")
-      .insert(callData)
-      .select()
-      .single();
-
-    if (callError) {
-      console.error(`[FATHOM_WEBHOOK ${requestId}] Error creating call:`, callError);
-      await logWebhook(DEFAULT_ORG_ID, "fathom", payload.event_type, { error: callError.message }, "error");
-      return NextResponse.json({ error: "Failed to create call record" }, { status: 500 });
-    }
-
-    console.log(`[FATHOM_WEBHOOK ${requestId}] Created call: ${newCall.id}`);
-
-    // Trigger AI scoring (async, don't wait)
-    scoreCallAsync(newCall.id, repId, callData.transcript, callData.summary);
-
-    // Log success
-    await logWebhook(DEFAULT_ORG_ID, "fathom", payload.event_type, { 
-      call_id: newCall.id,
-      rep_id: repId,
-      host_email: hostEmail,
-    }, "success");
-
-    return NextResponse.json({ 
-      success: true, 
-      callId: newCall.id,
-      repMatched: !!repId,
-      repName: matchedRepName,
-    });
-
-  } catch (error) {
-    console.error(`[FATHOM_WEBHOOK ${requestId}] Unhandled error:`, error);
-    await logWebhook(DEFAULT_ORG_ID, "fathom", "unknown", { 
-      error: error instanceof Error ? error.message : "Unknown error" 
-    }, "error");
+  } catch (error: any) {
+    console.error(`[WEBHOOK ${requestId}] CRITICAL ERROR:`, error.message);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 
-// Helper: Log webhook to database
-async function logWebhook(
-  orgId: string, 
-  source: string, 
-  eventType: string, 
-  payload: any, 
-  status: 'success' | 'error' | 'pending'
-) {
+// ============================================================================
+// ZAPIER WEBHOOK HANDLER - Creates call with share_url
+// ============================================================================
+async function processZapierWebhook(requestId: string, payload: any, trace: any) {
+  console.log(`[WEBHOOK ${requestId}] ========== ZAPIER PROCESSING ==========`);
+  
+  const recordingId = payload.recording_id;
+  const hostEmail = payload.host_email;
+  const meetingTitle = payload.meeting_title || payload.title;
+  const duration = payload.duration;
+  const createdAt = payload.created_at;
+  const zapierShareUrl = payload.share_url || payload.public_url || payload.fathom_video_url;
+  const zapierShareToken = payload.share_token || payload.public_token;
+  
+  console.log(`[WEBHOOK ${requestId}] Zapier data:`);
+  console.log(`[WEBHOOK ${requestId}] - recording_id: ${recordingId}`);
+  console.log(`[WEBHOOK ${requestId}] - share_url: ${zapierShareUrl || 'NOT PROVIDED'}`);
+  
+  trace.processing = {
+    handler: "zapier",
+    recording_id: recordingId,
+    share_url: zapierShareUrl,
+  };
+
+  if (!recordingId) {
+    return NextResponse.json({ error: "Missing recording_id" }, { status: 400 });
+  }
+
   try {
-    const serviceSupabase = await createServiceClient();
-    await serviceSupabase.from("webhook_logs").insert({
-      org_id: orgId,
-      source,
-      event_type: eventType,
-      payload,
-      status,
-      error_message: status === "error" ? payload.error : null,
+    const supabase = await createServiceClient();
+    
+    // Extract share_token from share_url if needed
+    let finalShareToken = zapierShareToken;
+    if (zapierShareUrl && !finalShareToken) {
+      const match = zapierShareUrl.match(/\/share\/([a-zA-Z0-9_-]+)/);
+      if (match) finalShareToken = match[1];
+    }
+
+    // UPSERT: Try to find existing call
+    const { data: existingCall, error: findError } = await supabase
+      .from("calls")
+      .select("id, rep_id, share_url, transcript, summary")
+      .eq("fathom_call_id", recordingId)
+      .maybeSingle();
+
+    const callData: any = {
+      org_id: DEFAULT_ORG_ID,
+      fathom_call_id: recordingId,
+      title: meetingTitle || "Untitled",
+      occurred_at: createdAt || new Date().toISOString(),
+      duration_seconds: duration ? Math.round(parseFloat(duration) * 60) : null,
+      host_email: hostEmail?.toLowerCase(),
+      source: "zapier",
+      // Field ownership tracking
+      share_url_source: "zapier",
+      last_enriched_at: new Date().toISOString(),
+      // Status tracking
+      transcript_status: "pending",
+      summary_status: "pending",
+      score_status: "pending",
+    };
+
+    // Only set share fields if provided (don't overwrite existing)
+    if (zapierShareUrl) {
+      callData.share_url = zapierShareUrl;
+      callData.share_token = finalShareToken;
+    }
+
+    let call;
+    
+    if (existingCall) {
+      // UPDATE: Merge with existing, don't overwrite populated fields
+      const updateData: any = {
+        ...callData,
+        // Never overwrite existing share_url with null
+        share_url: zapierShareUrl || existingCall.share_url,
+        // Never overwrite existing transcript/summary
+        transcript: existingCall.transcript,
+        summary: existingCall.summary,
+        transcript_status: existingCall.transcript ? "ready" : "pending",
+        summary_status: existingCall.summary ? "ready" : "pending",
+      };
+      
+      const { data, error } = await supabase
+        .from("calls")
+        .update(updateData)
+        .eq("id", existingCall.id)
+        .select()
+        .single();
+        
+      if (error) throw error;
+      call = data;
+      console.log(`[WEBHOOK ${requestId}] Updated existing call: ${call.id}`);
+    } else {
+      // CREATE: New call
+      const { data, error } = await supabase
+        .from("calls")
+        .insert(callData)
+        .select()
+        .single();
+        
+      if (error) throw error;
+      call = data;
+      console.log(`[WEBHOOK ${requestId}] Created new call: ${call.id}`);
+    }
+
+    // Match rep
+    const { repId, repName } = await findRep(hostEmail);
+    if (repId && !existingCall?.rep_id) {
+      await supabase.from("calls").update({ rep_id: repId }).eq("id", call.id);
+    }
+
+    trace.result = { action: existingCall ? "updated" : "created", call_id: call.id };
+
+    return NextResponse.json({
+      debugVersion: "HYBRID-FATHOM-V2",
+      success: true,
+      callId: call.id,
+      sourceDetected: "zapier",
+      action: existingCall ? "updated" : "created",
+      recordingId: recordingId,
+      shareUrlStored: !!call.share_url,
+      transcriptStatus: call.transcript_status,
+      summaryStatus: call.summary_status,
     });
-  } catch (err) {
-    console.error("[WEBHOOK_LOG] Failed to log:", err);
+
+  } catch (err: any) {
+    console.error(`[WEBHOOK ${requestId}] ZAPIER ERROR:`, err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
 
-// Helper: Score call asynchronously
-async function scoreCallAsync(callId: string, repId: string | null, transcript: string | null, summary: string | null) {
+// ============================================================================
+// FATHOM DIRECT WEBHOOK HANDLER - Official Svix signature verification
+// ============================================================================
+async function processFathomDirectWebhook(
+  requestId: string, 
+  payload: any, 
+  rawBody: string, 
+  request: NextRequest,
+  trace: any
+) {
+  console.log(`[WEBHOOK ${requestId}] ========== FATHOM DIRECT PROCESSING ==========`);
+  
+  // Get Svix-style headers
+  const webhookId = request.headers.get("webhook-id") || "";
+  const webhookSignature = request.headers.get("webhook-signature") || "";
+  const webhookTimestamp = request.headers.get("webhook-timestamp") || "";
+  const secret = process.env.FATHOM_WEBHOOK_SECRET;
+  
+  // Log secret presence (safely)
+  const secretPreview = secret ? secret.substring(0, 6) + "***" : "NOT_SET";
+  
+  console.log(`[WEBHOOK ${requestId}] Svix headers:`, {
+    has_webhook_id: !!webhookId,
+    has_webhook_signature: !!webhookSignature,
+    has_webhook_timestamp: !!webhookTimestamp,
+    env_secret_present: !!secret,
+    secret_prefix_preview: secretPreview,
+  });
+  
+  if (!webhookId || !webhookSignature || !webhookTimestamp || !secret) {
+    console.error(`[WEBHOOK ${requestId}] Missing Svix headers or secret`);
+    trace.early_diagnostics.sourceDetected = "fathom_direct";
+    trace.early_diagnostics.signature_valid = false;
+    trace.early_diagnostics.failure_stage = "signature_check";
+    trace.early_diagnostics.env_secret_present = !!secret;
+    trace.early_diagnostics.secret_prefix_preview = secretPreview;
+    await logDiagnostics(requestId, trace.early_diagnostics);
+    return NextResponse.json({ error: "Unauthorized - Missing Svix headers" }, { status: 401 });
+  }
+  
+  // Verify using official Svix library
+  let isValid = false;
+  let verificationError = "";
+  
   try {
-    const serviceSupabase = await createServiceClient();
-
-    // Get rep role to determine rubric
-    let rubricType: 'closer' | 'sdr' | 'generic' = 'generic';
+    const wh = new Webhook(secret);
     
-    if (repId) {
-      const { data: rep } = await serviceSupabase
-        .from("reps")
-        .select("role")
-        .eq("id", repId)
-        .single();
-      
-      if (rep?.role === 'closer' || rep?.role === 'sdr') {
-        rubricType = rep.role;
+    // Svix verify expects headers as an object with specific casing
+    const headers = {
+      "webhook-id": webhookId,
+      "webhook-signature": webhookSignature,
+      "webhook-timestamp": webhookTimestamp,
+    };
+    
+    // Verify the webhook - this throws on invalid signature
+    wh.verify(rawBody, headers);
+    isValid = true;
+    
+    console.log(`[WEBHOOK ${requestId}] Svix signature verified (official library)`);
+  } catch (err: any) {
+    isValid = false;
+    verificationError = err.message;
+    console.error(`[WEBHOOK ${requestId}] Svix verification failed:`, err.message);
+  }
+  
+  if (!isValid) {
+    console.error(`[WEBHOOK ${requestId}] Invalid Svix signature`);
+    trace.early_diagnostics.sourceDetected = "fathom_direct";
+    trace.early_diagnostics.signature_valid = false;
+    trace.early_diagnostics.failure_stage = "signature_check";
+    trace.early_diagnostics.env_secret_present = true;
+    trace.early_diagnostics.secret_prefix_preview = secretPreview;
+    trace.early_diagnostics.verification_library_used = true;
+    trace.early_diagnostics.verification_error_message = verificationError;
+    await logDiagnostics(requestId, trace.early_diagnostics);
+    return NextResponse.json({ error: "Invalid signature", detail: verificationError }, { status: 401 });
+  }
+  
+  trace.early_diagnostics.signature_valid = true;
+  trace.early_diagnostics.env_secret_present = true;
+  trace.early_diagnostics.secret_prefix_preview = secretPreview;
+  trace.early_diagnostics.verification_library_used = true;
+
+  // ============================================
+  // PAYLOAD DISCOVERY - Log full structure
+  // ============================================
+  console.log(`[WEBHOOK ${requestId}] PAYLOAD STRUCTURE DISCOVERY`);
+  console.log(`[WEBHOOK ${requestId}] Top-level keys:`, Object.keys(payload).join(", "));
+  
+  // Log raw payload for diagnostics (limit size)
+  const payloadJson = JSON.stringify(payload);
+  console.log(`[WEBHOOK ${requestId}] RAW PAYLOAD (first 2000 chars):`, payloadJson.substring(0, 2000));
+  
+  // Discover recording object if present
+  if (payload.recording) {
+    console.log(`[WEBHOOK ${requestId}] Recording object keys:`, Object.keys(payload.recording).join(", "));
+  }
+  
+  // ============================================
+  // RECORDING ID CANDIDATE DISCOVERY
+  // ============================================
+  const candidateIds = {
+    // Top level fields
+    id: payload.id,
+    recording_id: payload.recording_id,
+    recordingId: payload.recordingId,
+    meeting_id: payload.meeting_id,
+    uuid: payload.uuid,
+    external_id: payload.external_id,
+    
+    // Nested in recording object
+    recording_obj_id: payload.recording?.id,
+    recording_obj_uuid: payload.recording?.uuid,
+    recording_obj_external_id: payload.recording?.external_id,
+    recording_obj_recording_id: payload.recording?.recording_id,
+    
+    // From share URL extraction
+    share_url_token: payload.share_url ? (payload.share_url.match(/\/share\/([a-zA-Z0-9_-]+)/)?.[1] || null) : null,
+  };
+  
+  console.log(`[WEBHOOK ${requestId}] RECORDING ID CANDIDATES:`, candidateIds);
+  
+  // Extract identifiers from payload - try multiple sources
+  const recordingId = payload.recording_id?.toString() || 
+                      payload.id?.toString() || 
+                      payload.recording?.id?.toString() || 
+                      payload.recording?.recording_id?.toString() || 
+                      null;
+                      
+  const shareUrl = payload.share_url || payload.recording?.share_url || null;
+  const url = payload.url || payload.recording?.url || null;
+  const embedUrl = payload.embed_url || payload.recording?.embed_url || null;
+  const videoUrl = payload.video_url || payload.recording?.video_url || null;
+  const recordingUrl = payload.recording_url || payload.recording?.recording_url || null;
+  const thumbnailUrl = payload.thumbnail_url || payload.recording?.thumbnail_url || null;
+  
+  // Extract call ID from URL (format: https://fathom.video/calls/{id})
+  let fathomCallIdFromUrl: string | null = null;
+  if (url) {
+    const urlMatch = url.match(/\/calls\/(\d+)/);
+    if (urlMatch) {
+      fathomCallIdFromUrl = urlMatch[1];
+    }
+  }
+  
+  // Extract event type
+  const eventType = payload.type || payload.event || payload.event_type || payload.recording?.event_type || "unknown";
+  
+  // Store diagnostics
+  trace.early_diagnostics.webhook_recording_id_raw = payload.recording_id;
+  trace.early_diagnostics.api_recording_id_used = recordingId;
+  trace.early_diagnostics.all_candidate_ids = candidateIds;
+  trace.early_diagnostics.payload_top_level_keys = Object.keys(payload);
+  trace.early_diagnostics.payload_recording_keys = payload.recording ? Object.keys(payload.recording) : null;
+  
+  // ============================================
+  // TRANSCRIPT EXTRACTION - Check all paths
+  // ============================================
+  let transcriptText: string | null = null;
+  let transcriptPathMatched: string | null = null;
+  let transcriptTypeDetected = "none";
+  let transcriptArrayLength = 0;
+  
+  // Helper to extract text from various transcript formats
+  const extractTranscript = (value: any, path: string): { text: string | null; type: string; arrayLen: number } => {
+    if (!value) return { text: null, type: "null", arrayLen: 0 };
+    
+    if (typeof value === 'string') {
+      return { text: value, type: "string", arrayLen: 0 };
+    }
+    
+    if (Array.isArray(value)) {
+      const text = value
+        .map((item: any) => {
+          if (typeof item === 'string') return item;
+          if (item?.text) return item.text;
+          if (item?.content) return item.content;
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n");
+      return { text, type: "array", arrayLen: value.length };
+    }
+    
+    if (typeof value === 'object') {
+      if (value.text) return { text: value.text, type: "object.text", arrayLen: 0 };
+      if (value.content) return { text: value.content, type: "object.content", arrayLen: 0 };
+      if (value.segments && Array.isArray(value.segments)) {
+        const text = value.segments
+          .map((item: any) => item?.text || item?.content || "")
+          .filter(Boolean)
+          .join("\n");
+        return { text, type: "object.segments", arrayLen: value.segments.length };
       }
     }
-
-    // For now, generate mock scores (replace with real AI later)
-    const scores = generateMockScores(rubricType);
     
-    const { error } = await serviceSupabase.from("call_scores").insert({
-      call_id: callId,
-      rubric_type: rubricType,
-      overall_score: scores.overall,
-      ...scores.categories,
-      ai_summary: summary || `Call analyzed using ${rubricType} rubric.`,
-      strengths: scores.strengths,
-      improvements: scores.improvements,
-      coaching_recommendation: scores.coaching,
-    });
+    return { text: null, type: typeof value, arrayLen: 0 };
+  };
+  
+  // Check all transcript paths
+  const transcriptPaths = [
+    { value: payload.transcript, path: "transcript" },
+    { value: payload?.transcript?.text, path: "transcript.text" },
+    { value: payload?.transcript?.content, path: "transcript.content" },
+    { value: payload?.data?.transcript, path: "data.transcript" },
+    { value: payload?.data?.transcript?.text, path: "data.transcript.text" },
+    { value: payload?.data?.transcript?.content, path: "data.transcript.content" },
+    { value: payload?.payload?.transcript, path: "payload.transcript" },
+    { value: payload?.payload?.transcript?.text, path: "payload.transcript.text" },
+    { value: payload?.payload?.transcript?.content, path: "payload.transcript.content" },
+  ];
+  
+  for (const { value, path } of transcriptPaths) {
+    if (value !== undefined && value !== null) {
+      const result = extractTranscript(value, path);
+      if (result.text && result.text.length > 0) {
+        transcriptText = result.text;
+        transcriptPathMatched = path;
+        transcriptTypeDetected = result.type;
+        transcriptArrayLength = result.arrayLen;
+        break;
+      }
+    }
+  }
+  
+  // ============================================
+  // SUMMARY EXTRACTION - Check all paths
+  // ============================================
+  let summaryText: string | null = null;
+  let summaryPathMatched: string | null = null;
+  let summaryTypeDetected = "none";
+  
+  // Check all summary paths
+  const summaryPaths = [
+    { value: payload.summary, path: "summary" },
+    { value: payload?.summary?.text, path: "summary.text" },
+    { value: payload?.summary?.content, path: "summary.content" },
+    { value: payload?.data?.summary, path: "data.summary" },
+    { value: payload?.data?.summary?.text, path: "data.summary.text" },
+    { value: payload?.data?.summary?.content, path: "data.summary.content" },
+    { value: payload?.payload?.summary, path: "payload.summary" },
+    { value: payload?.payload?.summary?.text, path: "payload.summary.text" },
+    { value: payload?.payload?.summary?.content, path: "payload.summary.content" },
+    { value: payload.default_summary, path: "default_summary" },
+    { value: payload.ai_summary, path: "ai_summary" },
+  ];
+  
+  for (const { value, path } of summaryPaths) {
+    if (value !== undefined && value !== null) {
+      if (typeof value === 'string' && value.length > 0) {
+        summaryText = value;
+        summaryPathMatched = path;
+        summaryTypeDetected = "string";
+        break;
+      }
+      if (typeof value === 'object' && (value.text || value.content)) {
+        summaryText = value.text || value.content;
+        summaryPathMatched = path;
+        summaryTypeDetected = "object";
+        break;
+      }
+    }
+  }
+  
+  // ============================================
+  // ACTION ITEMS
+  // ============================================
+  const actionItems = Array.isArray(payload.action_items) ? payload.action_items : 
+                      Array.isArray(payload.recording?.action_items) ? payload.recording.action_items : 
+                      null;
+  
+  // ============================================
+  // HIGHLIGHTS
+  // ============================================
+  const highlights = Array.isArray(payload.highlights) ? payload.highlights : 
+                     Array.isArray(payload.recording?.highlights) ? payload.recording.highlights : 
+                     null;
+  
+  // ============================================
+  // SPEAKERS
+  // ============================================
+  const speakers = Array.isArray(payload.speakers) ? payload.speakers : 
+                   Array.isArray(payload.recording?.speakers) ? payload.recording.speakers : 
+                   null;
+  
+  // ============================================
+  // PARTICIPANTS
+  // ============================================
+  const participants = Array.isArray(payload.participants) ? payload.participants : 
+                       Array.isArray(payload.recording?.participants) ? payload.recording.participants : 
+                       null;
+  
+  // ============================================
+  // IDENTIFIER LOGS
+  // ============================================
+  console.log(`[WEBHOOK ${requestId}] IDENTIFIERS DETECTED:`, {
+    recordingIdDetected: recordingId,
+    shareUrlDetected: shareUrl,
+    embedUrlDetected: embedUrl,
+    videoUrlDetected: videoUrl,
+    recordingUrlDetected: recordingUrl,
+    thumbnailUrlDetected: thumbnailUrl,
+    fathomCallIdFromUrlDetected: fathomCallIdFromUrl,
+  });
+  
+  // ============================================
+  // TRANSCRIPT LOGS
+  // ============================================
+  console.log(`[WEBHOOK ${requestId}] TRANSCRIPT NORMALIZED:`, {
+    transcriptPathMatched,
+    transcriptTypeDetected,
+    transcriptArrayLength,
+    transcriptChars: transcriptText ? transcriptText.length : 0,
+    transcriptPreviewFirst120: transcriptText ? transcriptText.substring(0, 120) + "..." : "none",
+  });
+  
+  // ============================================
+  // SUMMARY LOGS
+  // ============================================
+  console.log(`[WEBHOOK ${requestId}] SUMMARY NORMALIZED:`, {
+    summaryPathMatched,
+    summaryTypeDetected,
+    summaryChars: summaryText ? summaryText.length : 0,
+    summaryPreviewFirst120: summaryText ? summaryText.substring(0, 120) + "..." : "none",
+  });
+  
+  // ============================================
+  // CONTENT DETECTION LOGS
+  // ============================================
+  console.log(`[WEBHOOK ${requestId}] CONTENT DETECTED:`, {
+    transcriptDetected: !!transcriptText,
+    transcriptChars: transcriptText ? transcriptText.length : 0,
+    summaryDetected: !!summaryText,
+    summaryChars: summaryText ? summaryText.length : 0,
+    actionItemsCount: actionItems ? actionItems.length : 0,
+    highlightsCount: highlights ? highlights.length : 0,
+    speakersCount: speakers ? speakers.length : 0,
+    participantsCount: participants ? participants.length : 0,
+    meetingTitle: payload.meeting_title || payload.title || payload.recording?.title || "Untitled",
+  });
 
-    if (error) {
-      console.error(`[SCORING] Error scoring call ${callId}:`, error);
+  trace.early_diagnostics.sourceDetected = "fathom_direct";
+  trace.early_diagnostics.eventTypeDetected = eventType;
+  trace.early_diagnostics.recordingIdDetected = recordingId;
+  trace.early_diagnostics.transcriptTypeDetected = transcriptTypeDetected;
+  trace.early_diagnostics.transcriptArrayLength = transcriptArrayLength;
+  trace.early_diagnostics.transcriptChars = transcriptText ? transcriptText.length : 0;
+  trace.early_diagnostics.summaryChars = summaryText ? summaryText.length : 0;
+  await logDiagnostics(requestId, trace.early_diagnostics);
+
+  trace.processing = {
+    handler: "fathom_direct",
+    event_type: eventType,
+    recording_id: recordingId,
+  };
+
+  try {
+    const supabase = await createServiceClient();
+
+    // ============================================
+    // STEP-BY-STEP MATCHING - Using REAL columns only
+    // ============================================
+    let existingCall: any = null;
+    let matchedBy: string | null = null;
+    let stepError: string | null = null;
+    
+    // 1️⃣ MATCH STEP 1: share_url exact match (highest priority - real column)
+    console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 START: share_url exact match`);
+    if (shareUrl) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 QUERY VALUE: ${shareUrl}`);
+      try {
+        const result = await supabase
+          .from("calls")
+          .select("id, share_url, fathom_call_id, transcript, summary")
+          .eq("share_url", shareUrl)
+          .limit(1);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 QUERY FINISHED`);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 ROW COUNT: ${result.data?.length ?? 0}`);
+        if (result.error) {
+          stepError = result.error.message;
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 ERROR: ${result.error.message}`);
+        } else if (result.data && result.data.length > 0) {
+          existingCall = result.data[0];
+          matchedBy = "share_url";
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 FOUND CALL ID: ${existingCall.id}`);
+          console.log(`[WEBHOOK ${requestId}] FOUND MATCH BY share_url: ${existingCall.id}`);
+        } else {
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 NOT FOUND`);
+        }
+      } catch (err: any) {
+        stepError = err.message;
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 ERROR: ${err.message}`);
+      }
     } else {
-      console.log(`[SCORING] Scored call ${callId} with ${rubricType} rubric`);
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 1: skipped (no share_url)`);
+    }
+    
+    // 2️⃣ MATCH STEP 2: fathom_call_id exact match (recording_id from payload)
+    if (!existingCall && recordingId) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 START: fathom_call_id exact match`);
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 QUERY VALUE: ${recordingId}`);
+      try {
+        const result = await supabase
+          .from("calls")
+          .select("id, share_url, fathom_call_id, transcript, summary")
+          .eq("fathom_call_id", recordingId)
+          .limit(1);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 QUERY FINISHED`);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 ROW COUNT: ${result.data?.length ?? 0}`);
+        if (result.error) {
+          stepError = result.error.message;
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 ERROR: ${result.error.message}`);
+        } else if (result.data && result.data.length > 0) {
+          existingCall = result.data[0];
+          matchedBy = "fathom_call_id";
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 FOUND CALL ID: ${existingCall.id}`);
+          console.log(`[WEBHOOK ${requestId}] FOUND MATCH BY fathom_call_id: ${existingCall.id}`);
+        } else {
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 NOT FOUND`);
+        }
+      } catch (err: any) {
+        stepError = err.message;
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 ERROR: ${err.message}`);
+      }
+    } else if (!recordingId) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 2: skipped (no recording_id)`);
+    }
+    
+    // 3️⃣ MATCH STEP 3: fathom_call_id from URL (extracted from payload.url)
+    if (!existingCall && fathomCallIdFromUrl) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 START: fathom_call_id from url exact match`);
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 QUERY VALUE: ${fathomCallIdFromUrl}`);
+      try {
+        const result = await supabase
+          .from("calls")
+          .select("id, share_url, fathom_call_id, transcript, summary")
+          .eq("fathom_call_id", fathomCallIdFromUrl)
+          .limit(1);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 QUERY FINISHED`);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 ROW COUNT: ${result.data?.length ?? 0}`);
+        if (result.error) {
+          stepError = result.error.message;
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 ERROR: ${result.error.message}`);
+        } else if (result.data && result.data.length > 0) {
+          existingCall = result.data[0];
+          matchedBy = "fathom_call_id_from_url";
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 FOUND CALL ID: ${existingCall.id}`);
+          console.log(`[WEBHOOK ${requestId}] FOUND MATCH BY fathom_call_id_from_url: ${existingCall.id}`);
+        } else {
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 NOT FOUND`);
+        }
+      } catch (err: any) {
+        stepError = err.message;
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 ERROR: ${err.message}`);
+      }
+    } else if (!fathomCallIdFromUrl) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 3: skipped (no fathom_call_id from url)`);
+    }
+    
+    // 4️⃣ No more steps - if no match found by now, create new
+    if (!existingCall) {
+      console.log(`[WEBHOOK ${requestId}] NO MATCH FOUND AFTER ALL STEPS`);
     }
 
-  } catch (err) {
-    console.error(`[SCORING] Error:`, err);
+    console.log(`[WEBHOOK ${requestId}] MATCHING COMPLETE:`, {
+      matchedExistingCall: !!existingCall,
+      matchedBy: matchedBy,
+      existingCallId: existingCall?.id || null,
+      stepError: stepError,
+    });
+
+    const updateData: any = {
+      source: "fathom_direct",
+      fathom_event_type: eventType,
+      last_enriched_at: new Date().toISOString(),
+      raw_webhook_meta: {
+        event_type: eventType,
+        received_at: new Date().toISOString(),
+        matched_by: matchedBy,
+      },
+    };
+
+    // Only update fields if provided (don't overwrite with null)
+    if (transcriptText !== null && transcriptText !== undefined && transcriptText.length > 0) {
+      updateData.transcript = transcriptText;
+      updateData.transcript_status = "ready";
+      updateData.transcript_source = "fathom_direct";
+    }
+    
+    if (summaryText !== null && summaryText !== undefined && summaryText.length > 0) {
+      updateData.summary = summaryText;
+      updateData.summary_status = "ready";
+      updateData.summary_source = "fathom_direct";
+    }
+    
+    if (actionItems !== null && actionItems !== undefined && actionItems.length > 0) {
+      updateData.action_items = actionItems;
+      updateData.action_items_source = "fathom_direct";
+    }
+    
+    if (highlights !== null && highlights !== undefined && highlights.length > 0) {
+      updateData.highlights = highlights;
+    }
+    
+    if (speakers !== null && speakers !== undefined && speakers.length > 0) {
+      updateData.speakers = speakers;
+    }
+    
+    if (participants !== null && participants !== undefined && participants.length > 0) {
+      updateData.participants = participants;
+    }
+    
+    // Update identifiers and media URLs if not already set
+    if (shareUrl && !existingCall?.share_url) {
+      updateData.share_url = shareUrl;
+    }
+    if (embedUrl && !existingCall?.embed_url) {
+      updateData.embed_url = embedUrl;
+    }
+    if (videoUrl && !existingCall?.video_url) {
+      updateData.video_url = videoUrl;
+    }
+    if (recordingUrl && !existingCall?.recording_url) {
+      updateData.recording_url = recordingUrl;
+    }
+    if (thumbnailUrl && !existingCall?.thumbnail_url) {
+      updateData.thumbnail_url = thumbnailUrl;
+    }
+    if (recordingId && !existingCall?.fathom_call_id) {
+      updateData.fathom_call_id = recordingId;
+    }
+    
+    // Update highlights/speakers/participants if present and not already set
+    if ((payload.highlights || payload.recording?.highlights) && !existingCall?.highlights) {
+      updateData.highlights = payload.highlights || payload.recording?.highlights;
+    }
+    if ((payload.speakers || payload.recording?.speakers) && !existingCall?.speakers) {
+      updateData.speakers = payload.speakers || payload.recording?.speakers;
+    }
+    if ((payload.participants || payload.recording?.participants) && !existingCall?.participants) {
+      updateData.participants = payload.participants || payload.recording?.participants;
+    }
+
+    let call;
+    
+    if (existingCall) {
+      // UPDATE existing
+      const { data, error } = await supabase
+        .from("calls")
+        .update(updateData)
+        .eq("id", existingCall.id)
+        .select()
+        .single();
+        
+      if (error) throw error;
+      call = data;
+      console.log(`[WEBHOOK ${requestId}] UPDATED EXISTING CALL: ${call.id}`);
+    } else {
+      // CREATE minimal fallback call (only if no match found)
+      console.log(`[WEBHOOK ${requestId}] No match found - creating new call`);
+      const insertData: any = {
+        org_id: DEFAULT_ORG_ID,
+        fathom_call_id: recordingId || fathomCallIdFromUrl,
+        title: payload.meeting_title || payload.title || payload.recording?.title || "Untitled",
+        occurred_at: payload.created_at || payload.recording?.created_at || new Date().toISOString(),
+        duration_seconds: payload.duration_seconds || payload.duration || payload.recording?.duration_seconds || null,
+        host_email: payload.host_email || payload.recording?.host_email || null,
+        share_url: shareUrl,
+        embed_url: embedUrl,
+        video_url: videoUrl,
+        recording_url: recordingUrl,
+        thumbnail_url: thumbnailUrl,
+        ...updateData,
+        transcript_status: transcriptText ? "ready" : "pending",
+        summary_status: summaryText ? "ready" : "pending",
+      };
+      
+      // Only add fields if they exist
+      if (payload.highlights || payload.recording?.highlights) {
+        insertData.highlights = payload.highlights || payload.recording?.highlights;
+      }
+      if (payload.speakers || payload.recording?.speakers) {
+        insertData.speakers = payload.speakers || payload.recording?.speakers;
+      }
+      if (payload.participants || payload.recording?.participants) {
+        insertData.participants = payload.participants || payload.recording?.participants;
+      }
+      
+      const { data, error } = await supabase
+        .from("calls")
+        .insert(insertData)
+        .select()
+        .single();
+        
+      if (error) throw error;
+      call = data;
+      console.log(`[WEBHOOK ${requestId}] CREATED NEW CALL: ${call.id}`);
+    }
+
+    // Trigger scoring if transcript is ready and long enough
+    if (call.transcript && call.transcript.length > 500 && call.score_status !== "completed") {
+      console.log(`[WEBHOOK ${requestId}] Triggering scoring for call: ${call.id}`);
+      await scoreCall(call.id, call.rep_id, call.transcript, call.summary);
+    }
+
+    trace.result = { 
+      action: existingCall ? "updated" : "created", 
+      call_id: call.id,
+      matched_existing_call: !!existingCall,
+      matched_by: matchedBy,
+      transcript_updated: !!transcriptText,
+      summary_updated: !!summaryText,
+    };
+
+    console.log(`[WEBHOOK ${requestId}] FINAL STORED FIELDS:`, {
+      transcriptStored: !!call.transcript,
+      transcriptChars: call.transcript ? call.transcript.length : 0,
+      summaryStored: !!call.summary,
+      summaryChars: call.summary ? call.summary.length : 0,
+      actionItemsStored: !!call.action_items,
+      highlightsStored: !!call.highlights,
+      speakersStored: !!call.speakers,
+      participantsStored: !!call.participants,
+      shareUrlStored: !!call.share_url,
+      embedUrlStored: !!call.embed_url,
+      videoUrlStored: !!call.video_url,
+      recordingUrlStored: !!call.recording_url,
+      thumbnailUrlStored: !!call.thumbnail_url,
+    });
+
+    console.log(`[WEBHOOK ${requestId}] FINAL RESULT:`, {
+      matchedExistingCall: !!existingCall,
+      matchedBy: matchedBy,
+      existingCallId: existingCall?.id || null,
+      updatedExistingCallId: existingCall ? call.id : null,
+      createdNewCallId: existingCall ? null : call.id,
+      transcriptChars: transcriptText ? transcriptText.length : 0,
+      summaryChars: summaryText ? summaryText.length : 0,
+      actionItemsCount: actionItems ? actionItems.length : 0,
+      highlightsCount: highlights ? highlights.length : 0,
+      speakersCount: speakers ? speakers.length : 0,
+      recordingIdDetected: recordingId,
+      fathomCallIdFromUrlDetected: fathomCallIdFromUrl,
+      shareUrlStored: !!call.share_url,
+      embedUrlStored: !!call.embed_url,
+      videoUrlStored: !!call.video_url,
+      recordingUrlStored: !!call.recording_url,
+      thumbnailUrlStored: !!call.thumbnail_url,
+    });
+
+    return NextResponse.json({
+      debugVersion: "FATHOM-SVIX-FIX-V1",
+      success: true,
+      callId: call.id,
+      sourceDetected: "fathom_direct",
+      signatureValid: true,
+      matchedExistingCall: !!existingCall,
+      matchedBy: matchedBy,
+      eventType: eventType,
+      action: existingCall ? "updated" : "created",
+      transcriptUpdated: !!transcriptText,
+      summaryUpdated: !!summaryText,
+      actionItemsUpdated: !!actionItems,
+    });
+
+  } catch (err: any) {
+    console.error(`[WEBHOOK ${requestId}] FATHOM DIRECT ERROR:`, err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
 
-// Helper: Generate mock scores (replace with real AI)
-function generateMockScores(rubricType: 'closer' | 'sdr' | 'generic') {
-  const randomScore = () => Math.floor(Math.random() * 4) + 6; // 6-9 range
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+async function findRep(email?: string): Promise<{ repId: string | null; repName: string | null }> {
+  if (!email) return { repId: null, repName: null };
   
-  if (rubricType === 'closer') {
-    return {
-      overall: 7.2,
-      categories: {
-        opening_score: randomScore(),
-        rapport_score: randomScore(),
-        discovery_score: randomScore(),
-        credit_expertise_score: randomScore(),
-        value_explanation_score: randomScore(),
-        objection_handling_score: randomScore(),
-        close_attempt_score: randomScore(),
-        structure_score: randomScore(),
-        product_knowledge_score: randomScore(),
-      },
-      strengths: ["Strong product knowledge", "Good rapport building"],
-      improvements: ["Could ask more discovery questions", "Closing could be more assumptive"],
-      coaching: "Focus on assumptive closing techniques in next training.",
-    };
-  } else if (rubricType === 'sdr') {
-    return {
-      overall: 7.5,
-      categories: {
-        opening_score: randomScore(),
-        rapport_score: randomScore(),
-        qualification_score: randomScore(),
-        curiosity_probing_score: randomScore(),
-        agenda_control_score: randomScore(),
-        booking_quality_score: randomScore(),
-        urgency_score: randomScore(),
-        structure_score: randomScore(),
-        communication_clarity_score: randomScore(),
-      },
-      strengths: ["Great opening hook", "Clear communication"],
-      improvements: ["Could create more urgency", "Qualification depth"],
-      coaching: "Work on creating urgency without being pushy.",
-    };
+  try {
+    const supabase = await createServiceClient();
+    
+    // Try fathom_email first
+    const { data: byFathomEmail } = await supabase
+      .from("reps")
+      .select("id, name")
+      .ilike("fathom_email", email)
+      .maybeSingle();
+    
+    if (byFathomEmail) {
+      return { repId: byFathomEmail.id, repName: byFathomEmail.name };
+    }
+    
+    // Fallback to regular email
+    const { data: byEmail } = await supabase
+      .from("reps")
+      .select("id, name")
+      .ilike("email", email)
+      .maybeSingle();
+    
+    if (byEmail) {
+      return { repId: byEmail.id, repName: byEmail.name };
+    }
+    
+    return { repId: null, repName: null };
+  } catch {
+    return { repId: null, repName: null };
   }
-  
-  return {
-    overall: 7.0,
-    categories: {
-      opening_score: randomScore(),
-      discovery_score: randomScore(),
-      rapport_score: randomScore(),
-      objection_handling_score: randomScore(),
-      closing_score: randomScore(),
-      structure_score: randomScore(),
-      product_knowledge_score: randomScore(),
-    },
-    strengths: ["Good engagement"],
-    improvements: ["Structure could be tighter"],
-    coaching: "General coaching recommended.",
-  };
+}
+
+async function scoreCall(callId: string, repId: string | null, transcript: string | null, summary: string | null) {
+  // Placeholder for scoring logic
+  console.log(`[SCORE] Would score call ${callId}`);
+  return { scored: false, reason: "Scoring not implemented" };
+}
+
+async function saveTrace(requestId: string, action: string, source: string, trace: any, status: string) {
+  // Placeholder for trace logging
+  console.log(`[TRACE ${requestId}] ${action} - ${status}`);
+}
+
+async function logDiagnostics(requestId: string, diagnostics: any) {
+  console.log(`[DIAGNOSTICS ${requestId}]`, diagnostics);
 }

@@ -4,10 +4,10 @@ import { cookies } from "next/headers";
 export async function createClient() {
   const cookieStore = await cookies();
   
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_PROJECT_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   
   if (!supabaseUrl) {
-    throw new Error("Missing Supabase URL: Set NEXT_PUBLIC_SUPABASE_PROJECT_URL or NEXT_PUBLIC_SUPABASE_URL");
+    throw new Error("Missing Supabase URL: Set NEXT_PUBLIC_SUPABASE_URL");
   }
 
   return createServerClient(
@@ -39,10 +39,10 @@ export async function createClient() {
  * ONLY use this for server-side operations that need elevated privileges.
  */
 export async function createServiceClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_PROJECT_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   
   if (!supabaseUrl) {
-    throw new Error("Missing Supabase URL");
+    throw new Error("Missing Supabase URL: Set NEXT_PUBLIC_SUPABASE_URL");
   }
   
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

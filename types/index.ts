@@ -1,5 +1,6 @@
 export type RepRole = 'admin' | 'closer' | 'sdr';
 export type RepStatus = 'active' | 'inactive';
+export type SalesRole = 'closer' | 'sdr' | null;
 
 export interface Organization {
   id: string;
@@ -17,6 +18,7 @@ export interface Rep {
   fathom_email: string | null;
   name: string;
   role: RepRole;
+  sales_role: SalesRole;
   status: RepStatus;
   created_at: string;
   updated_at: string;

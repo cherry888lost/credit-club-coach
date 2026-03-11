@@ -12,7 +12,7 @@ import {
   Menu,
   X
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import type { RepRole } from "@/types";
 
 const navigation = [
@@ -32,22 +32,26 @@ interface DashboardShellProps {
 export default function DashboardShell({ children, orgName, userRole }: DashboardShellProps) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
       {/* Mobile sidebar overlay */}
-      {sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
+      <div 
+        className={`fixed inset-0 z-40 lg:hidden transition-colors duration-300 ${
+          sidebarOpen ? "bg-black/50 pointer-events-auto" : "bg-transparent pointer-events-none"
+        }`}
+        onClick={closeSidebar}
+        aria-hidden="true"
+      />
 
       {/* Sidebar */}
       <aside 
         className={`
-          fixed top-0 left-0 z-50 h-full w-64 bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800
-          transform transition-transform duration-200 ease-in-out
+          fixed top-0 left-0 z-50 h-full w-64 
+          bg-white dark:bg-zinc-900 
+          border-r border-zinc-200 dark:border-zinc-800
+          transform transition-transform duration-300 ease-in-out
           ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
         `}
       >
@@ -68,8 +72,9 @@ export default function DashboardShell({ children, orgName, userRole }: Dashboar
               </div>
             </Link>
             <button 
-              className="lg:hidden p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
-              onClick={() => setSidebarOpen(false)}
+              className="lg:hidden p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
+              onClick={closeSidebar}
+              aria-label="Close sidebar"
             >
               <X className="w-5 h-5 text-zinc-600 dark:text-zinc-400" />
             </button>
@@ -78,7 +83,9 @@ export default function DashboardShell({ children, orgName, userRole }: Dashboar
           {/* Navigation */}
           <nav className="flex-1 px-4 py-6 space-y-1">
             {navigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const isActive = item.href === "/dashboard"
+                ? pathname === "/dashboard"
+                : pathname.startsWith(`${item.href}/`) || pathname === item.href;
               const Icon = item.icon;
               
               return (
@@ -86,15 +93,16 @@ export default function DashboardShell({ children, orgName, userRole }: Dashboar
                   key={item.name}
                   href={item.href}
                   className={`
-                    flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
+                    flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
+                    transition-all duration-150
                     ${isActive 
                       ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400" 
                       : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-200"
                     }
                   `}
-                  onClick={() => setSidebarOpen(false)}
+                  onClick={closeSidebar}
                 >
-                  <Icon className="w-5 h-5" />
+                  <Icon className="w-5 h-5 shrink-0" />
                   {item.name}
                 </Link>
               );
@@ -125,13 +133,14 @@ export default function DashboardShell({ children, orgName, userRole }: Dashboar
       </aside>
 
       {/* Main content */}
-      <div className="lg:pl-64">
+      <div className="lg:pl-64 transition-[padding] duration-300">
         {/* Header */}
         <header className="sticky top-0 z-30 h-16 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border-b border-zinc-200 dark:border-zinc-800">
           <div className="flex h-full items-center justify-between px-4 sm:px-6 lg:px-8">
             <button
-              className="lg:hidden p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
+              className="lg:hidden p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
               onClick={() => setSidebarOpen(true)}
+              aria-label="Open sidebar"
             >
               <Menu className="w-5 h-5 text-zinc-600 dark:text-zinc-400" />
             </button>
