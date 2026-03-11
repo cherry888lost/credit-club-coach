@@ -6,13 +6,13 @@ export default function SignInPage() {
       <SignIn 
         routing="path" 
         path="/sign-in"
-        signUpUrl="/sign-up"
         forceRedirectUrl="/dashboard"
         fallbackRedirectUrl="/dashboard"
         appearance={{
           elements: {
             rootBox: "mx-auto",
             card: "shadow-xl",
+            footerAction: "hidden",
           },
         }}
       />

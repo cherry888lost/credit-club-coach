@@ -38,6 +38,7 @@ export default async function CallsPage({
   const dateFilter = (params.date as "today" | "yesterday" | "this_week" | "this_month" | undefined) || undefined;
   const sortFilter = (params.sort as "newest" | "oldest" | "highest" | "lowest" | undefined) || undefined;
 
+  console.log("[CallsPage] Raw params:", JSON.stringify(params));
   console.log("[CallsPage] Filters:", { repFilter, roleFilter, statusFilter, outcomeFilter, dateFilter, sortFilter });
 
   // Build date range
@@ -93,6 +94,8 @@ export default async function CallsPage({
   }
 
   const { data: callsData, error: callsError } = await callsQuery;
+
+  console.log("[CallsPage] Query returned:", callsData?.length, "calls, error:", callsError?.message || "none");
 
   if (callsError) {
     console.error("[CallsPage] Error:", callsError);
@@ -177,6 +180,8 @@ export default async function CallsPage({
   } else if (sortFilter === "lowest") {
     calls.sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
   }
+
+  console.log("[CallsPage] After all filters:", calls.length, "calls remaining");
 
   const totalCount = calls.length;
 
