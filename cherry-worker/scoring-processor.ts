@@ -13,7 +13,8 @@ export interface ScoringRequest {
   id: string;
   call_id: string;
   transcript: string;
-  agent_name?: string;
+  agent_name?: string;  // legacy column name
+  rep_name?: string;    // current column name (used by API routes)
   status: 'pending' | 'processing' | 'completed' | 'failed';
   error_message?: string;
   created_at: string;
@@ -33,7 +34,7 @@ export interface ProcessorConfig {
 
 let _supabase: SupabaseClient | null = null;
 
-function getSupabase(config: ProcessorConfig): SupabaseClient {
+export function getSupabase(config: ProcessorConfig): SupabaseClient {
   if (!_supabase) {
     _supabase = createClient(config.supabaseUrl, config.supabaseServiceKey, {
       auth: { persistSession: false },
@@ -43,24 +44,65 @@ function getSupabase(config: ProcessorConfig): SupabaseClient {
 }
 
 // ---------------------------------------------------------------------------
-// Poll: fetch pending scoring requests
+// Poll: fetch pending scoring requests (excluding deleted calls)
 // ---------------------------------------------------------------------------
 
 export async function pollSupabase(config: ProcessorConfig): Promise<ScoringRequest[]> {
   const sb = getSupabase(config);
+  console.log(`[POLL] Starting poll for pending scoring requests`);
 
   // Also reclaim requests stuck in "processing" for too long
   const cutoff = new Date(Date.now() - PROCESSING_TIMEOUT_MINUTES * 60_000).toISOString();
+  console.log(`[POLL] Reclaim cutoff: ${cutoff}`);
 
-  const { data, error } = await sb
+  // First, get pending/processing requests
+  const { data: requests, error } = await sb
     .from('scoring_requests')
     .select('*')
     .or(`status.eq.pending,and(status.eq.processing,updated_at.lt.${cutoff})`)
     .order('created_at', { ascending: true })
     .limit(POLL_LIMIT);
 
-  if (error) throw new Error(`pollSupabase failed: ${error.message}`);
-  return (data ?? []) as ScoringRequest[];
+  if (error) {
+    console.error(`[POLL] ERROR: ${error.message}`);
+    throw new Error(`pollSupabase failed: ${error.message}`);
+  }
+  
+  console.log(`[POLL] Found ${requests?.length || 0} raw requests`);
+  if (requests && requests.length > 0) {
+    console.log(`[POLL] Request IDs: ${requests.map((r: any) => r.id).join(', ')}`);
+    console.log(`[POLL] Request statuses: ${requests.map((r: any) => `${r.id}=${r.status}`).join(', ')}`);
+  }
+  
+  // Filter out requests for deleted calls
+  const scoringRequests = (requests ?? []) as ScoringRequest[];
+  if (scoringRequests.length === 0) {
+    console.log(`[POLL] No requests to process`);
+    return [];
+  }
+
+  const callIds = scoringRequests.map(r => r.call_id);
+  console.log(`[POLL] Checking call_ids for deletion: ${callIds.join(', ')}`);
+
+  // Check which calls are deleted
+  const { data: deletedCalls } = await sb
+    .from('calls')
+    .select('id')
+    .in('id', callIds)
+    .not('deleted_at', 'is', null);
+
+  const deletedCallIds = new Set((deletedCalls || []).map((c: any) => c.id));
+  console.log(`[POLL] Deleted call_ids: ${[...deletedCallIds].join(', ') || 'none'}`);
+
+  // Filter out requests for deleted calls
+  const filteredRequests = scoringRequests.filter(r => !deletedCallIds.has(r.call_id));
+
+  if (filteredRequests.length < scoringRequests.length) {
+    console.log(`[pollSupabase] Filtered out ${scoringRequests.length - filteredRequests.length} requests for deleted calls`);
+  }
+
+  console.log(`[POLL] Returning ${filteredRequests.length} requests to process`);
+  return filteredRequests;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +111,7 @@ export async function pollSupabase(config: ProcessorConfig): Promise<ScoringRequ
 
 export async function claimRequest(config: ProcessorConfig, requestId: string): Promise<boolean> {
   const sb = getSupabase(config);
+  console.log(`[CLAIM] Attempting to claim request: ${requestId}`);
 
   const { data, error } = await sb
     .from('scoring_requests')
@@ -78,7 +121,16 @@ export async function claimRequest(config: ProcessorConfig, requestId: string): 
     .select('id')
     .single();
 
-  if (error || !data) return false;
+  if (error) {
+    console.error(`[CLAIM] FAILED for ${requestId}: ${error.message}`);
+    return false;
+  }
+  if (!data) {
+    console.error(`[CLAIM] FAILED for ${requestId}: no data returned (row may be locked)`);
+    return false;
+  }
+  
+  console.log(`[CLAIM] SUCCESS for ${requestId}`);
   return true;
 }
 
@@ -137,6 +189,10 @@ export function parseReasonerOutput(raw: string): ScoringResult {
   }
 
   // Validate close_type (null is valid)
+  // Handle both actual null and string "null" from AI output
+  if (parsed.close_type === 'null') {
+    parsed.close_type = null;
+  }
   if (parsed.close_type !== null && !SCORING_RUBRIC.closeTypes.includes(parsed.close_type)) {
     throw new Error(`Invalid close_type: ${parsed.close_type}`);
   }
@@ -156,10 +212,31 @@ export function parseReasonerOutput(raw: string): ScoringResult {
     }
   }
 
+  // Validate low_signal (boolean, defaults to false if missing for backward compat)
+  if (typeof parsed.low_signal !== 'boolean') {
+    parsed.low_signal = false;
+  }
+
   // Validate arrays exist
   for (const field of ['strengths', 'weaknesses', 'objections_detected', 'objections_handled_well', 'objections_missed', 'next_coaching_actions']) {
     if (!Array.isArray(parsed[field])) {
       throw new Error(`Missing or invalid array field: ${field}`);
+    }
+  }
+
+  // Validate coaching_markers (optional — default to empty array if missing for backward compat)
+  if (!Array.isArray(parsed.coaching_markers)) {
+    parsed.coaching_markers = [];
+  } else {
+    // Validate each marker has required fields
+    for (const marker of parsed.coaching_markers) {
+      if (typeof marker.timestamp !== 'string') marker.timestamp = '00:00';
+      if (typeof marker.seconds !== 'number') marker.seconds = 0;
+      if (typeof marker.title !== 'string') marker.title = 'Untitled';
+      if (typeof marker.category !== 'string') marker.category = 'unknown';
+      if (!['positive', 'negative'].includes(marker.type)) marker.type = 'negative';
+      if (!['high', 'medium', 'low'].includes(marker.severity)) marker.severity = 'medium';
+      if (typeof marker.note !== 'string') marker.note = '';
     }
   }
 
@@ -201,6 +278,7 @@ export async function writeScore(
     quality_label: result.quality_label,
     outcome: result.outcome,
     close_type: result.close_type,
+    low_signal: result.low_signal,
     categories: result.categories,
     strengths: result.strengths,
     weaknesses: result.weaknesses,
@@ -208,8 +286,11 @@ export async function writeScore(
     objections_handled_well: result.objections_handled_well,
     objections_missed: result.objections_missed,
     next_coaching_actions: result.next_coaching_actions,
+    coaching_markers: result.coaching_markers || [],
     created_at: new Date().toISOString(),
   };
+
+  console.log(`[WRITE_SCORE] callId=${callId}, overall_score=${row.overall_score}, quality_label=${row.quality_label}`);
 
   const { data, error } = await sb
     .from('call_scores')
@@ -217,7 +298,12 @@ export async function writeScore(
     .select('id')
     .single();
 
-  if (error) throw new Error(`writeScore failed: ${error.message}`);
+  if (error) {
+    console.error(`[WRITE_SCORE] FAILED: ${error.message}`);
+    throw new Error(`writeScore failed: ${error.message}`);
+  }
+
+  console.log(`[WRITE_SCORE] SUCCESS: id=${data!.id}`);
   return data!.id;
 }
 
@@ -228,6 +314,8 @@ export async function writeScore(
 export async function markCompleted(config: ProcessorConfig, requestId: string, scoreId: string): Promise<void> {
   const sb = getSupabase(config);
 
+  console.log(`[MARK_COMPLETED] requestId=${requestId}, scoreId=${scoreId}`);
+
   const { error } = await sb
     .from('scoring_requests')
     .update({
@@ -237,11 +325,18 @@ export async function markCompleted(config: ProcessorConfig, requestId: string, 
     })
     .eq('id', requestId);
 
-  if (error) throw new Error(`markCompleted failed: ${error.message}`);
+  if (error) {
+    console.error(`[MARK_COMPLETED] FAILED: ${error.message}`);
+    throw new Error(`markCompleted failed: ${error.message}`);
+  }
+
+  console.log(`[MARK_COMPLETED] SUCCESS`);
 }
 
 export async function markFailed(config: ProcessorConfig, requestId: string, errorMessage: string): Promise<void> {
   const sb = getSupabase(config);
+
+  console.log(`[MARK_FAILED] requestId=${requestId}, error=${errorMessage.slice(0, 100)}`);
 
   const { error } = await sb
     .from('scoring_requests')
@@ -253,6 +348,8 @@ export async function markFailed(config: ProcessorConfig, requestId: string, err
     .eq('id', requestId);
 
   if (error) {
-    console.error(`markFailed itself failed for ${requestId}:`, error.message);
+    console.error(`[MARK_FAILED] FAILED to update: ${error.message}`);
+  } else {
+    console.log(`[MARK_FAILED] SUCCESS`);
   }
 }

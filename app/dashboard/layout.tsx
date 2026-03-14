@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUserWithRole } from "@/lib/auth";
 import DashboardShell from "./_components/DashboardShell";
 
 export default async function DashboardLayout({
@@ -7,7 +7,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const user = await getCurrentUser();
+  const user = await getCurrentUserWithRole();
   
   // Not authenticated - redirect to sign in
   if (!user?.userId) {
@@ -19,14 +19,12 @@ export default async function DashboardLayout({
     const isDuplicateError = user.error?.includes("23505") || user.error?.includes("duplicate");
     
     // If it's a duplicate error, the rep exists but we couldn't fetch it
-    // This shouldn't happen with service role, but handle it gracefully
     if (isDuplicateError) {
       console.log("[DashboardLayout] Duplicate key error - rep exists, retrying...");
-      // Retry the auth check (which should now find the existing rep)
-      const retryUser = await getCurrentUser();
+      const retryUser = await getCurrentUserWithRole();
       if (retryUser?.rep) {
         return (
-          <DashboardShell orgName="Credit Club Team" userRole={retryUser.rep.role}>
+          <DashboardShell orgName="Credit Club Team" userRole={retryUser.rep.role} isAdmin={retryUser.isAdminUser}>
             {children}
           </DashboardShell>
         );
@@ -50,7 +48,7 @@ export default async function DashboardLayout({
   }
   
   return (
-    <DashboardShell orgName="Credit Club Team" userRole={user.rep.role}>
+    <DashboardShell orgName="Credit Club Team" userRole={user.rep.role} isAdmin={user.isAdminUser}>
       {children}
     </DashboardShell>
   );

@@ -1,8 +1,5 @@
 // cherry-worker/index.ts
 // Entry point: orchestrates the scoring pipeline
-//
-// Designed to run inside an OpenClaw heartbeat or as a standalone invocation.
-// Uses sessions_spawn (agentId="reasoner") for the actual LLM analysis.
 
 import {
   ProcessorConfig,
@@ -14,8 +11,9 @@ import {
   writeScore,
   markCompleted,
   markFailed,
+  getSupabase,
 } from './scoring-processor';
-import { buildScoringPrompt } from './reasoner-prompt';
+import { buildScoringPrompt, ScoringResult } from './reasoner-prompt';
 
 // ---------------------------------------------------------------------------
 // Config from environment
@@ -46,18 +44,30 @@ export async function processRequest(
   request: ScoringRequest,
   spawnFn: (prompt: string, agentId: string) => Promise<string>,
 ): Promise<{ scoreId: string }> {
+  console.log(`[PROCESS] Starting request ${request.id}, call ${request.call_id}, transcript length: ${request.transcript?.length}`);
+
   // 1. Validate transcript
   const transcript = validateTranscript(request.transcript);
+  console.log(`[PROCESS] Transcript validated, length: ${transcript.length}`);
 
-  // 2. Build prompt
-  const prompt = buildScoringPrompt(transcript, request.agent_name);
+  // 2. Build prompt (rep_name is the current column, agent_name is legacy)
+  const repName = request.rep_name || request.agent_name;
+  const prompt = buildScoringPrompt(transcript, repName);
 
   // 3. Spawn reasoner and get raw output
   const agentId = config.reasonerAgentId ?? 'reasoner';
   const rawOutput = await spawnFn(prompt, agentId);
+  console.log(`[PROCESS] Raw output received, length: ${rawOutput.length}`);
 
   // 4. Parse and validate the output
-  const result = parseReasonerOutput(rawOutput);
+  let result: ScoringResult;
+  try {
+    result = parseReasonerOutput(rawOutput);
+  } catch (parseErr: any) {
+    console.error(`[PROCESS] Parse error: ${parseErr.message}`);
+    throw parseErr;
+  }
+  console.log(`[PROCESS] Parsed successfully: overall_score=${result.overall_score}, quality_label=${result.quality_label}, outcome=${result.outcome}`);
 
   // 5. Write score to call_scores
   if (config.dryRun) {
@@ -66,6 +76,43 @@ export async function processRequest(
   }
 
   const scoreId = await writeScore(config, request.call_id, request.id, result);
+  console.log(`[PROCESS] Score written: ${scoreId}`);
+
+  // 6. Post-scoring hook: extract patterns for controlled learning
+  try {
+    const supabase = getSupabase(config);
+    const orgId = '00000000-0000-0000-0000-000000000001';
+    const { runPostScoringHook } = await import('./post-scoring-hook');
+    
+    const hookResult = await runPostScoringHook({
+      supabase,
+      orgId,
+      scoreData: {
+        id: scoreId,
+        call_id: request.call_id,
+        overall_score: result.overall_score,
+        quality_label: result.quality_label,
+        outcome: result.outcome,
+        close_type: result.close_type,
+        categories: result.categories,
+        strengths: result.strengths,
+        weaknesses: result.weaknesses,
+        objections_detected: result.objections_detected,
+        objections_handled_well: result.objections_handled_well,
+        objections_missed: result.objections_missed,
+      },
+      repName: request.rep_name || request.agent_name || null,
+      callDate: null,
+      transcript: request.transcript,
+      durationSeconds: null,
+    });
+
+    console.log(`[PROCESS] Post-scoring hook: patternsSaved=${hookResult.patternsSaved}`);
+  } catch (hookErr: any) {
+    console.warn(`[PROCESS] Post-scoring hook failed (non-fatal):`, hookErr.message);
+  }
+
+  console.log(`[PROCESS] Complete: scoreId=${scoreId}`);
   return { scoreId };
 }
 
@@ -127,9 +174,6 @@ if (require.main === module) {
   (async () => {
     const config = loadConfig();
 
-    // In standalone mode, we don't have OpenClaw's sessions_spawn available.
-    // This is primarily for testing. In production, the heartbeat hook or
-    // OpenClaw orchestrator provides the real spawnFn.
     console.log('[cherry-worker] Starting standalone scoring cycle...');
     console.log('[cherry-worker] Note: standalone mode requires a spawnFn adapter.');
     console.log('[cherry-worker] Use the heartbeat hook (.openclaw/heartbeat/scoring-check.ts) for production.');

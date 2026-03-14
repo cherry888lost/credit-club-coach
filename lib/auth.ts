@@ -111,7 +111,7 @@ export async function requireAuth(): Promise<CurrentUser> {
 
 export async function requireAdmin(): Promise<CurrentUser> {
   const user = await requireAuth();
-  if (user.rep?.role !== "admin") throw new Error("Admin access required");
+  if (!isAdmin(user)) throw new Error("Admin access required");
   return user;
 }
 
@@ -132,8 +132,42 @@ export function hasRole(user: CurrentUser | null, roles: RepRole[]): boolean {
 }
 
 /**
- * Check if user is admin
+ * Check if user has full (admin/manager) access.
+ * Grants access if:
+ *  - rep.role === 'admin'
+ *  - rep.sales_role === 'manager' (cast from DB — may not match TS union)
+ *  - rep.name matches "Alexa" (business rule)
  */
 export function isAdmin(user: CurrentUser | null): boolean {
-  return user?.rep?.role === "admin";
+  if (!user?.rep) return false;
+  const rep = user.rep;
+  if (rep.role === "admin") return true;
+  if ((rep.sales_role as string) === "manager") return true;
+  // Alexa is treated as admin per business rules
+  if (rep.name?.toLowerCase().startsWith("alexa")) return true;
+  return false;
+}
+
+/**
+ * Check if user is a regular sales rep (closer or SDR) — i.e. NOT admin.
+ */
+export function isSalesRep(user: CurrentUser | null): boolean {
+  if (!user?.rep) return false;
+  return !isAdmin(user);
+}
+
+/**
+ * Get current user with role helpers pre-computed.
+ * Returns the user plus boolean flags for easy consumption.
+ */
+export async function getCurrentUserWithRole(): Promise<
+  (CurrentUser & { isAdminUser: boolean; isSalesRepUser: boolean }) | null
+> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  return {
+    ...user,
+    isAdminUser: isAdmin(user),
+    isSalesRepUser: isSalesRep(user),
+  };
 }

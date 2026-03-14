@@ -10,26 +10,33 @@ import {
   BarChart3, 
   Settings,
   Menu,
-  X
+  X,
+  Brain,
+  Upload,
+  BookOpen
 } from "lucide-react";
 import { useState, useCallback } from "react";
 import type { RepRole } from "@/types";
 
 const navigation = [
-  { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Calls", href: "/dashboard/calls", icon: Phone },
-  { name: "Reps", href: "/dashboard/reps", icon: Users },
-  { name: "Analysis", href: "/dashboard/analysis", icon: BarChart3 },
-  { name: "Settings", href: "/dashboard/settings", icon: Settings },
+  { name: "Overview", href: "/dashboard", icon: LayoutDashboard, adminOnly: false },
+  { name: "Calls", href: "/dashboard/calls", icon: Phone, adminOnly: false },
+  { name: "Reps", href: "/dashboard/reps", icon: Users, adminOnly: false },
+  { name: "Analysis", href: "/dashboard/analysis", icon: BarChart3, adminOnly: true },
+  { name: "Learning Queue", href: "/dashboard/learning-queue", icon: Brain, adminOnly: true },
+  { name: "Pattern Library", href: "/dashboard/patterns", icon: BookOpen, adminOnly: true },
+  { name: "Import Calls", href: "/dashboard/import-calls", icon: Upload, adminOnly: true },
+  { name: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: false },
 ];
 
 interface DashboardShellProps {
   children: React.ReactNode;
   orgName: string;
   userRole?: RepRole;
+  isAdmin?: boolean;
 }
 
-export default function DashboardShell({ children, orgName, userRole }: DashboardShellProps) {
+export default function DashboardShell({ children, orgName, userRole, isAdmin: isAdminUser }: DashboardShellProps) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
@@ -82,7 +89,9 @@ export default function DashboardShell({ children, orgName, userRole }: Dashboar
 
           {/* Navigation */}
           <nav className="flex-1 px-4 py-6 space-y-1">
-            {navigation.map((item) => {
+            {navigation
+              .filter((item) => !item.adminOnly || isAdminUser)
+              .map((item) => {
               const isActive = item.href === "/dashboard"
                 ? pathname === "/dashboard"
                 : pathname.startsWith(`${item.href}/`) || pathname === item.href;

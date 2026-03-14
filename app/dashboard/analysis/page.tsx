@@ -1,4 +1,5 @@
-import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
+import { redirect } from "next/navigation";
+import { getCurrentUserWithRole, getDefaultOrgId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import {
@@ -45,7 +46,7 @@ function getMonday(d: Date): Date {
 }
 
 function getEffectiveOutcome(score: any): string | null {
-  return score.manual_outcome || score.outcome || null;
+  return score.manual_outcome || score.outcome || score.close_outcome || null;
 }
 
 function scoreBadgeClass(score: number): string {
@@ -109,10 +110,15 @@ export default async function AnalysisPage({
   searchParams: Promise<{ sort?: string }>;
 }) {
   const params = await searchParams;
-  const user = await getCurrentUser();
+  const user = await getCurrentUserWithRole();
 
   if (!user || !user.rep) {
     return null;
+  }
+
+  // SERVER-SIDE: Analysis is admin-only
+  if (!user.isAdminUser) {
+    redirect("/dashboard");
   }
 
   const supabase = await createServiceClient();
@@ -130,52 +136,59 @@ export default async function AnalysisPage({
     .eq("org_id", orgId)
     .eq("status", "active");
 
-  // Fetch calls this week with scores
+  // Fetch calls this week with scores (excluding soft-deleted)
   const { data: weekCalls } = await supabase
     .from("calls")
     .select(`
       id,
       title,
       created_at,
-      source,
       rep_id,
       call_scores(
         call_id,
         overall_score,
-        outcome,
-        manual_outcome,
+        score_total,
+        close_outcome,
         close_type,
-        manual_close_type,
-        low_signal,
         strengths,
         weaknesses,
         objections_detected,
-        objections_handled_well,
-        objections_missed,
-        categories,
-        quality_label,
-        rubric_type,
-        next_coaching_actions
+        score_grade,
+        score_breakdown,
+        coaching_feedback,
+        missed_opportunities
       )
     `)
     .eq("org_id", orgId)
     .gte("created_at", mondayISO)
-    .neq("source", "demo");
+    .is("deleted_at", null); // CRITICAL: Exclude soft-deleted calls
 
   // Build scored calls list (only calls that have scores)
   const scoredCalls = (weekCalls || [])
     .filter((c: any) => c.call_scores)
-    .map((c: any) => ({
-      id: c.id,
-      title: c.title,
-      created_at: c.created_at,
-      rep_id: c.rep_id,
-      score: c.call_scores as any,
-    }));
+    .map((c: any) => {
+      const s = c.call_scores;
+      return {
+        id: c.id,
+        title: c.title,
+        created_at: c.created_at,
+        rep_id: c.rep_id,
+        score: {
+          ...s,
+          score_total: s.overall_score ?? s.score_total,
+          outcome: s.close_outcome,
+          manual_outcome: null,
+          categories: null,
+          quality_label: s.score_grade,
+          rubric_type: null,
+          next_coaching_actions: s.coaching_feedback ? [s.coaching_feedback] : [],
+        } as any,
+      };
+    });
 
   // ---- Section A: Team Snapshot ----
   const totalScored = scoredCalls.length;
-  const allScores = scoredCalls.map((c) => c.score.overall_score).filter((s: any): s is number => s != null);
+  const allScores = scoredCalls.map((c) => c.score.score_total).filter((s: any): s is number => s != null);
   const teamAvg = allScores.length > 0 ? allScores.reduce((a: number, b: number) => a + b, 0) / allScores.length : null;
 
   let closedCount = 0;
@@ -215,32 +228,30 @@ export default async function AnalysisPage({
     const calls: any[] = repData.calls;
     if (calls.length === 0) continue;
 
-    const scores = calls.map((c) => c.score.overall_score).filter((s: any): s is number => s != null);
+    const scores = calls.map((c) => c.score.score_total).filter((s: any): s is number => s != null);
     const avg = scores.length > 0 ? scores.reduce((a: number, b: number) => a + b, 0) / scores.length : 0;
 
-    // Separate non-low-signal calls, fall back to all if needed
-    const goodCalls = calls.filter((c) => !c.score.low_signal);
-    const pool = goodCalls.length > 0 ? goodCalls : calls;
+    const pool = calls;
 
     // Best closed call
-    const closedCalls = pool.filter((c) => getEffectiveOutcome(c.score) === "closed" && c.score.overall_score != null);
+    const closedCalls = pool.filter((c) => getEffectiveOutcome(c.score) === "closed" && c.score.score_total != null);
     const bestClosed = closedCalls.length > 0
-      ? closedCalls.reduce((best: any, c: any) => (c.score.overall_score > best.score.overall_score ? c : best))
+      ? closedCalls.reduce((best: any, c: any) => (c.score.score_total > best.score.score_total ? c : best))
       : null;
 
     // Best non-closed call
     const nonClosedCalls = pool.filter((c) => {
       const oc = getEffectiveOutcome(c.score);
-      return oc && oc !== "closed" && c.score.overall_score != null;
+      return oc && oc !== "closed" && c.score.score_total != null;
     });
     const bestNonClosed = nonClosedCalls.length > 0
-      ? nonClosedCalls.reduce((best: any, c: any) => (c.score.overall_score > best.score.overall_score ? c : best))
+      ? nonClosedCalls.reduce((best: any, c: any) => (c.score.score_total > best.score.score_total ? c : best))
       : null;
 
     // Worst call
-    const allWithScores = pool.filter((c) => c.score.overall_score != null);
+    const allWithScores = pool.filter((c) => c.score.score_total != null);
     const worstCall = allWithScores.length > 0
-      ? allWithScores.reduce((worst: any, c: any) => (c.score.overall_score < worst.score.overall_score ? c : worst))
+      ? allWithScores.reduce((worst: any, c: any) => (c.score.score_total < worst.score.score_total ? c : worst))
       : null;
 
     reviewQueue.push({
@@ -316,7 +327,7 @@ export default async function AnalysisPage({
   for (const [, repData] of repMap) {
     const calls: any[] = repData.calls;
     if (calls.length === 0) continue;
-    const scores = calls.map((c) => c.score.overall_score).filter((s: any): s is number => s != null);
+    const scores = calls.map((c) => c.score.score_total).filter((s: any): s is number => s != null);
     const avg = scores.length > 0 ? scores.reduce((a: number, b: number) => a + b, 0) / scores.length : 0;
     let cl = 0, fu = 0, ns = 0;
     for (const c of calls) {
@@ -356,7 +367,7 @@ export default async function AnalysisPage({
       <div>
         <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Weekly Manager Operating System</h1>
         <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
-          Week of {monday.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} — Team review &amp; coaching insights
+          Week of {monday.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} — Team review & coaching insights
         </p>
       </div>
 
@@ -720,7 +731,7 @@ function CallCard({
   }
 
   const outcome = getEffectiveOutcome(call.score);
-  const score = call.score.overall_score;
+  const score = call.score.score_total;
 
   return (
     <div className={`bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border-l-4 ${borderColors[accentColor]} p-4`}>

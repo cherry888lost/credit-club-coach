@@ -33,7 +33,7 @@ export async function GET(
       .eq("call_id", callId)
       .single();
 
-    if (score) {
+    if (score && score.overall_score != null) {
       return NextResponse.json({
         status: "completed",
         scoreId: score.id,

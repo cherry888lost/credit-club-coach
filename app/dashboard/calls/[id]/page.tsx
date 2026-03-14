@@ -1,12 +1,18 @@
-import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
+import { getCurrentUserWithRole, getDefaultOrgId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { RefreshMediaButton } from "./refresh-media-button";
 import { GenerateScoreButton } from "./generate-score-button";
 import { OutcomeLogger } from "./_components/OutcomeLogger";
 // import { FollowUpGenerator } from "./_components/FollowUpGenerator";
 import { EnhancedCoaching } from "./_components/EnhancedCoaching";
+import { CoachingMarkers } from "./_components/CoachingMarkers";
+import { CloseTypeBadge } from "@/components/ui/CloseTypeBadge";
+import { ObjectionTimeline } from "@/components/ui/ObjectionTimeline";
+import { TechniqueBadge } from "@/components/ui/TechniqueBadge";
+import { CoachingFeedback } from "@/components/ui/CoachingFeedback";
+import { KeyQuotes } from "@/components/ui/KeyQuotes";
 import {
   ArrowLeft,
   User,
@@ -30,6 +36,11 @@ import {
   Lightbulb,
   MessageSquare,
   Wrench,
+  Trash2,
+  Award,
+  Zap,
+  BarChart3,
+  AlertTriangle,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +57,16 @@ const CATEGORY_LABELS: Record<string, string> = {
   confidence_authority: "Confidence & Authority",
   next_steps_clarity: "Next Steps Clarity",
   overall_close_quality: "Close Quality",
+};
+
+// Enhanced score breakdown labels and max values
+const SCORE_BREAKDOWN_CONFIG: Record<string, { label: string; max: number; color: string }> = {
+  close_quality: { label: "Close Quality", max: 25, color: "indigo" },
+  objection_handling: { label: "Objection Handling", max: 20, color: "blue" },
+  value_stacking: { label: "Value Stacking", max: 20, color: "emerald" },
+  urgency_usage: { label: "Urgency Usage", max: 15, color: "amber" },
+  discovery_rapport: { label: "Discovery & Rapport", max: 10, color: "purple" },
+  professionalism: { label: "Professionalism", max: 10, color: "cyan" },
 };
 
 function scoreColor(score: number): string {
@@ -70,15 +91,46 @@ function qualityBadge(label: string) {
   return styles[label] || styles.average;
 }
 
+function gradeColor(grade: string): string {
+  if (grade.startsWith("A")) return "text-green-600 dark:text-green-400";
+  if (grade.startsWith("B")) return "text-blue-600 dark:text-blue-400";
+  if (grade.startsWith("C")) return "text-amber-600 dark:text-amber-400";
+  if (grade.startsWith("D")) return "text-orange-600 dark:text-orange-400";
+  return "text-red-600 dark:text-red-400";
+}
+
+function gradeBgColor(grade: string): string {
+  if (grade.startsWith("A")) return "bg-green-100 dark:bg-green-900/30";
+  if (grade.startsWith("B")) return "bg-blue-100 dark:bg-blue-900/30";
+  if (grade.startsWith("C")) return "bg-amber-100 dark:bg-amber-900/30";
+  if (grade.startsWith("D")) return "bg-orange-100 dark:bg-orange-900/30";
+  return "bg-red-100 dark:bg-red-900/30";
+}
+
+function outcomeColor(outcome: string): string {
+  switch (outcome) {
+    case "closed": return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400";
+    case "follow_up": return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400";
+    case "no_sale": return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400";
+    default: return "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400";
+  }
+}
+
+function breakdownBarColor(pct: number): string {
+  if (pct >= 75) return "bg-green-500";
+  if (pct >= 50) return "bg-amber-500";
+  return "bg-red-500";
+}
+
 export default async function CallDetailPage({ params }: { params: { id: string } }) {
   const { id } = await Promise.resolve(params);
-  const user = await getCurrentUser();
+  const user = await getCurrentUserWithRole();
 
   if (!user || !user.rep) {
     return null;
   }
 
-  const isAdmin = user.rep.role === "admin";
+  const isAdmin = user.isAdminUser;
   const supabase = await createServiceClient();
   const orgId = await getDefaultOrgId();
 
@@ -94,6 +146,17 @@ export default async function CallDetailPage({ params }: { params: { id: string 
     notFound();
   }
 
+  // Check if call is soft-deleted - return 404 for deleted calls
+  if (call.deleted_at) {
+    console.log(`[CallDetail] Call ${id} is deleted (deleted_at: ${call.deleted_at})`);
+    notFound();
+  }
+
+  // SERVER-SIDE ENFORCEMENT: non-admins can only view their own calls
+  if (!isAdmin && call.rep_id !== user.rep.id) {
+    notFound();
+  }
+
   // Check if flagged
   const { data: flag } = await supabase
     .from("flags")
@@ -103,8 +166,14 @@ export default async function CallDetailPage({ params }: { params: { id: string 
     .single();
 
   const isFlagged = !!flag;
-  const scores = call.call_scores;
-  const isScored = scores?.overall_score != null;
+  // call_scores is returned as an array from the join; take first if array
+  const scores = Array.isArray(call.call_scores) ? call.call_scores[0] : call.call_scores;
+  const isScored = scores?.score_total != null;
+  // Detect broken scores from old worker (null score_total with low_signal model)
+  const hasBrokenScore = scores && !isScored;
+
+  // Detect enhanced analysis availability
+  const hasEnhancedAnalysis = isScored && (scores.score_breakdown || scores.close_analysis);
 
   // Determine status
   const getStatus = () => {
@@ -141,6 +210,15 @@ export default async function CallDetailPage({ params }: { params: { id: string 
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
+
+  // Parse enhanced fields safely
+  const scoreBreakdown = scores?.score_breakdown as Record<string, number> | null;
+  const closeAnalysis = scores?.close_analysis as { type?: string; confidence?: number; structure?: any; evidence?: string[] } | null;
+  const objectionDetails = scores?.objection_details as Array<{ type: string; timestamp?: string; quote: string; response_quote: string; handling_score: number; confidence?: number }> | null;
+  const techniquesDetected = scores?.techniques_detected as Record<string, { score: number; components_used?: string[]; types_used?: string[]; evidence: string[] }> | null;
+  const missedOpportunities = scores?.missed_opportunities as string[] | null;
+  const keyQuotes = scores?.key_quotes as Array<{ quote: string; context?: string; type?: string }> | null;
+  const grade = scores?.score_grade as string | null;
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
@@ -181,28 +259,43 @@ export default async function CallDetailPage({ params }: { params: { id: string 
             )}
 
             {isScored && (
-              <span className="px-2.5 py-1 bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 text-xs font-semibold rounded-full uppercase">
+              <span className={`px-2.5 py-1 text-xs font-semibold rounded-full uppercase ${outcomeColor(scores.manual_outcome || scores.outcome || "pending")}`}>
                 {(scores.manual_outcome || scores.outcome || "pending").replace("_", " ")}
               </span>
             )}
 
             {isScored && (scores.manual_close_type || scores.close_type) && (scores.manual_outcome || scores.outcome) !== 'no_sale' && (
-              <span className="px-2.5 py-1 bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400 text-xs font-semibold rounded-full uppercase">
-                {(scores.manual_close_type || scores.close_type).replace("_", " ")}
+              <CloseTypeBadge type={scores.manual_close_type || scores.close_type} />
+            )}
+
+            {/* Grade badge for enhanced analysis */}
+            {grade && (
+              <span className={`px-3 py-1.5 text-sm font-bold rounded-full ${gradeBgColor(grade)} ${gradeColor(grade)}`}>
+                {grade}
               </span>
             )}
           </div>
 
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-zinc-600 dark:text-zinc-400">
             <span className="flex items-center gap-1.5">
-              <User className="w-4 h-4" /> {call.reps?.name || "Unassigned"}
+              <User className="w-4 h-4" /> {scores?.rep_name || call.reps?.name || "Unassigned"}
             </span>
+            {scores?.prospect_name && (
+              <span className="flex items-center gap-1.5">
+                <User className="w-4 h-4 text-indigo-500" /> {scores.prospect_name}
+              </span>
+            )}
             <span className="flex items-center gap-1.5">
               <Calendar className="w-4 h-4" /> {new Date(call.created_at).toLocaleString()}
             </span>
             {call.duration_seconds && (
               <span className="flex items-center gap-1.5">
                 <Clock className="w-4 h-4" /> {formatDuration(call.duration_seconds)}
+              </span>
+            )}
+            {hasEnhancedAnalysis && closeAnalysis?.confidence && (
+              <span className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
+                <BarChart3 className="w-4 h-4" /> {closeAnalysis.confidence}% confidence
               </span>
             )}
           </div>
@@ -222,6 +315,9 @@ export default async function CallDetailPage({ params }: { params: { id: string 
               {scores.overall_score}
             </div>
             <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">/ 100</p>
+            {grade && (
+              <p className={`text-lg font-bold mt-1 ${gradeColor(grade)}`}>{grade}</p>
+            )}
           </div>
         )}
       </div>
@@ -286,31 +382,167 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         </div>
       </div>
 
-      {/* ─── Generate / Regenerate Score Button ─── */}
-      <GenerateScoreButton
-        callId={call.id}
-        hasScore={isScored}
-        hasTranscript={!!call.transcript}
-        isAdmin={isAdmin}
-      />
-
-      {/* ─── Low Signal Warning ─── */}
-      {scores?.low_signal && (
-        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
-            <div>
-              <h3 className="font-semibold text-amber-800 dark:text-amber-400">Score Not Generated</h3>
-              <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-                Transcript too short or not a real sales call. This appears to be a test recording or lacks the necessary sales conversation content for meaningful analysis.
-              </p>
-            </div>
+      {/* ─── Broken score warning (from legacy worker) ─── */}
+      {hasBrokenScore && isAdmin && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-xl p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+              Incomplete Score Detected
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+              This call has a score record with no data (likely from the legacy scoring worker). 
+              Use &quot;Regenerate Score&quot; below to properly score this call.
+            </p>
           </div>
         </div>
       )}
 
-      {/* ─── 2. Score Overview ─── */}
-      {isScored && categories && (
+      {/* ─── Generate / Regenerate Score Button ─── */}
+      <GenerateScoreButton
+        callId={call.id}
+        hasScore={isScored || hasBrokenScore}
+        hasTranscript={!!call.transcript}
+        isAdmin={isAdmin}
+      />
+
+      {/* ═══════════════════════════════════════════════════════════════
+           ENHANCED ANALYSIS SECTIONS (shown when enhanced data available)
+           ═══════════════════════════════════════════════════════════════ */}
+      {hasEnhancedAnalysis && scoreBreakdown && (
+        <div className="space-y-6">
+          {/* ─── Enhanced Score Breakdown ─── */}
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+            <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Score Breakdown</h3>
+              <span className="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
+                {scores.overall_score} / 100
+              </span>
+            </div>
+
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {Object.entries(scoreBreakdown)
+                .filter(([k]) => k !== "total" && k !== "grade" && SCORE_BREAKDOWN_CONFIG[k])
+                .map(([key, value]) => {
+                  const config = SCORE_BREAKDOWN_CONFIG[key];
+                  if (!config) return null;
+                  const numValue = typeof value === "number" ? value : 0;
+                  const pct = Math.round((numValue / config.max) * 100);
+                  return (
+                    <div key={key} className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{config.label}</span>
+                        <span className="text-sm font-bold text-zinc-900 dark:text-white">
+                          {numValue}<span className="text-zinc-400 font-normal">/{config.max}</span>
+                        </span>
+                      </div>
+                      <div className="h-2.5 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${breakdownBarColor(pct)}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+
+          {/* ─── Sales Techniques ─── */}
+          {techniquesDetected && Object.keys(techniquesDetected).length > 0 && (
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+              <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
+                <Zap className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Sales Techniques</h3>
+              </div>
+              <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {Object.entries(techniquesDetected).map(([key, technique]) => (
+                  <TechniqueBadge
+                    key={key}
+                    name={key}
+                    technique={{
+                      score: technique.score,
+                      components_used: technique.components_used || technique.types_used || [],
+                      evidence: technique.evidence || [],
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ─── Objection Timeline (enhanced) ─── */}
+          {objectionDetails && objectionDetails.length > 0 && (
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+              <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
+                <Shield className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
+                  Objection Timeline ({objectionDetails.length})
+                </h3>
+              </div>
+              <div className="p-5">
+                <ObjectionTimeline objections={objectionDetails} />
+              </div>
+            </div>
+          )}
+
+          {/* ─── Key Quotes ─── */}
+          {keyQuotes && keyQuotes.length > 0 && (
+            <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+              <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
+                <MessageSquare className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
+                  Key Quotes ({keyQuotes.length})
+                </h3>
+              </div>
+              <div className="p-5">
+                <KeyQuotes quotes={keyQuotes} />
+              </div>
+            </div>
+          )}
+
+          {/* ─── Missed Opportunities ─── */}
+          {missedOpportunities && missedOpportunities.length > 0 && (
+            <div className="bg-amber-50 dark:bg-amber-900/10 rounded-xl border border-amber-200 dark:border-amber-800/50 shadow-sm">
+              <div className="p-4 border-b border-amber-200 dark:border-amber-800/50 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600" />
+                <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-300">
+                  Missed Opportunities
+                </h3>
+              </div>
+              <ul className="p-4 space-y-2">
+                {missedOpportunities.map((opp, i) => (
+                  <li
+                    key={i}
+                    className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200"
+                  >
+                    <span className="flex items-center justify-center w-5 h-5 rounded-full bg-amber-200 dark:bg-amber-800 text-amber-700 dark:text-amber-300 text-xs font-bold flex-shrink-0 mt-0.5">
+                      !
+                    </span>
+                    {opp}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* ─── Enhanced Coaching Feedback ─── */}
+          <CoachingFeedback
+            strengths={scores.strengths || []}
+            weaknesses={scores.weaknesses || []}
+            recommendations={scores.next_coaching_actions || []}
+            missedOpportunities={missedOpportunities || []}
+          />
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════
+           LEGACY ANALYSIS SECTIONS (fallback when no enhanced data)
+           ═══════════════════════════════════════════════════════════════ */}
+
+      {/* ─── 2. Score Overview (legacy categories) ─── */}
+      {isScored && categories && !hasEnhancedAnalysis && (
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
           <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
             <Target className="w-5 h-5 text-indigo-600" />
@@ -378,8 +610,74 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         </div>
       )}
 
-      {/* ─── 3. Strengths / Weaknesses ─── */}
-      {isScored && (scores.strengths?.length > 0 || scores.weaknesses?.length > 0) && (
+      {/* Also show legacy categories below enhanced if both exist */}
+      {isScored && categories && hasEnhancedAnalysis && (
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+          <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
+            <Target className="w-5 h-5 text-zinc-500" />
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Category Scores</h3>
+          </div>
+
+          <div className="p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {Object.entries(categories).map(([key, cat]) => (
+              <div
+                key={key}
+                className={`rounded-lg p-4 text-center ${scoreBgColor(cat.score)}`}
+              >
+                <div className={`text-2xl font-bold ${scoreColor(cat.score)}`}>
+                  {cat.score}
+                </div>
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 leading-tight">
+                  {CATEGORY_LABELS[key] || key}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <div className="px-4 pb-4">
+            <details className="group">
+              <summary className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400 cursor-pointer hover:text-zinc-700 dark:hover:text-zinc-300 py-2">
+                <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
+                Detailed category analysis
+              </summary>
+              <div className="mt-2 space-y-3">
+                {Object.entries(categories).map(([key, cat]) => (
+                  <div
+                    key={key}
+                    className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-3"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-medium text-sm">
+                        {CATEGORY_LABELS[key] || key}
+                      </h4>
+                      <span className={`text-lg font-bold ${scoreColor(cat.score)}`}>
+                        {cat.score}/10
+                      </span>
+                    </div>
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-2">
+                      {cat.reasoning}
+                    </p>
+                    {cat.evidence && (
+                      <blockquote className="text-xs text-zinc-500 dark:text-zinc-500 border-l-2 border-zinc-300 dark:border-zinc-600 pl-3 italic mb-2">
+                        &ldquo;{cat.evidence}&rdquo;
+                      </blockquote>
+                    )}
+                    {cat.improvement_tip && (
+                      <p className="text-xs text-indigo-600 dark:text-indigo-400 flex items-start gap-1.5">
+                        <Lightbulb className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                        {cat.improvement_tip}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          </div>
+        </div>
+      )}
+
+      {/* ─── 3. Strengths / Weaknesses (shown when NO enhanced analysis, or always as additional) ─── */}
+      {isScored && !hasEnhancedAnalysis && (scores.strengths?.length > 0 || scores.weaknesses?.length > 0) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Strengths */}
           {scores.strengths?.length > 0 && (
@@ -425,8 +723,8 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         </div>
       )}
 
-      {/* ─── 4. Objections ─── */}
-      {isScored &&
+      {/* ─── 4. Objections (legacy fallback) ─── */}
+      {isScored && !hasEnhancedAnalysis &&
         (scores.objections_detected?.length > 0 ||
           scores.objections_handled_well?.length > 0 ||
           scores.objections_missed?.length > 0) && (
@@ -506,8 +804,65 @@ export default async function CallDetailPage({ params }: { params: { id: string 
           </div>
         )}
 
-      {/* ─── 5. Next Coaching Actions ─── */}
-      {isScored && scores.next_coaching_actions?.length > 0 && (
+      {/* ─── Objections fallback when enhanced exists but no objection_details ─── */}
+      {isScored && hasEnhancedAnalysis && (!objectionDetails || objectionDetails.length === 0) &&
+        (scores.objections_detected?.length > 0 ||
+          scores.objections_handled_well?.length > 0 ||
+          scores.objections_missed?.length > 0) && (
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+            <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
+              <Shield className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Objections</h3>
+            </div>
+
+            <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+              {scores.objections_detected?.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <MessageSquare className="w-4 h-4 text-zinc-500" />
+                    <h4 className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                      Detected ({scores.objections_detected.length})
+                    </h4>
+                  </div>
+                  <ul className="space-y-1">
+                    {scores.objections_detected.map((o: string, i: number) => (
+                      <li key={i} className="text-sm px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-700 dark:text-zinc-300">{o}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {scores.objections_handled_well?.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <ShieldCheck className="w-4 h-4 text-green-500" />
+                    <h4 className="text-sm font-medium text-green-700 dark:text-green-400">Handled Well</h4>
+                  </div>
+                  <ul className="space-y-1">
+                    {scores.objections_handled_well.map((o: string, i: number) => (
+                      <li key={i} className="text-sm px-2.5 py-1.5 bg-green-50 dark:bg-green-900/20 rounded text-green-700 dark:text-green-400">{o}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {scores.objections_missed?.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <ShieldAlert className="w-4 h-4 text-red-500" />
+                    <h4 className="text-sm font-medium text-red-700 dark:text-red-400">Missed / Unresolved</h4>
+                  </div>
+                  <ul className="space-y-1">
+                    {scores.objections_missed.map((o: string, i: number) => (
+                      <li key={i} className="text-sm px-2.5 py-1.5 bg-red-50 dark:bg-red-900/20 rounded text-red-700 dark:text-red-400">{o}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+      {/* ─── 5. Next Coaching Actions (legacy fallback - shown when no enhanced) ─── */}
+      {isScored && !hasEnhancedAnalysis && scores.next_coaching_actions?.length > 0 && (
         <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-xl border border-indigo-200 dark:border-indigo-800 shadow-sm">
           <div className="p-4 border-b border-indigo-200 dark:border-indigo-800 flex items-center gap-2">
             <Wrench className="w-5 h-5 text-indigo-600" />
@@ -550,6 +905,19 @@ export default async function CallDetailPage({ params }: { params: { id: string 
 
       {/* ─── 5d. Follow-Up Message Generator (HIDDEN - not working) ─── */}
       {/* {isScored && <FollowUpGenerator callId={call.id} />} */}
+
+      {/* ─── 5e. Coaching Markers (timestamped moments) ─── */}
+      {isScored && scores.coaching_markers && (scores.coaching_markers as any[]).length > 0 && (
+        <CoachingMarkers
+          markers={scores.coaching_markers as any[]}
+          recordingUrl={
+            call.share_url ||
+            (call.share_token ? `https://fathom.video/share/${call.share_token}` : null) ||
+            call.video_url ||
+            null
+          }
+        />
+      )}
 
       {/* ─── 6. Summary (if available, visible) ─── */}
       {call.summary && (
@@ -619,6 +987,36 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                   <dt className="text-zinc-500">Fathom Status:</dt>
                   <dd>{call.fathom_status || "unknown"}</dd>
                 </div>
+                <div className="flex justify-between">
+                  <dt className="text-zinc-500">Deleted:</dt>
+                  <dd className={call.deleted_at ? "text-red-600 font-mono" : "text-zinc-500 font-mono"}>
+                    {call.deleted_at ? `Yes (${new Date(call.deleted_at).toLocaleString()})` : "No"}
+                  </dd>
+                </div>
+
+                {/* Enhanced analysis fields */}
+                {hasEnhancedAnalysis && (
+                  <div className="pt-2 border-t border-zinc-200 dark:border-zinc-700 mt-2">
+                    <p className="text-zinc-500 mb-2">Enhanced Analysis:</p>
+                    <div className="space-y-1 text-[10px]">
+                      {[
+                        { label: "Close Type", val: scores.close_type },
+                        { label: "Close Outcome", val: scores.close_outcome },
+                        { label: "Close Confidence", val: scores.close_confidence ? `${scores.close_confidence}%` : null },
+                        { label: "Grade", val: scores.score_grade },
+                        { label: "Value Stacking Score", val: scores.value_stacking_score },
+                        { label: "Urgency Score", val: scores.urgency_score },
+                        { label: "Rep Name", val: scores.rep_name },
+                        { label: "Prospect Name", val: scores.prospect_name },
+                      ].map(({ label, val }) => (
+                        <div key={label} className="flex justify-between">
+                          <span className="text-zinc-500">{label}:</span>
+                          <span className="font-mono">{val || "N/A"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Media availability */}
                 <div className="pt-2 border-t border-zinc-200 dark:border-zinc-700 mt-2">
@@ -651,6 +1049,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                       { label: "Transcript", val: call.transcript, len: call.transcript?.length },
                       { label: "Summary", val: call.summary, len: call.summary?.length },
                       { label: "Scored", val: isScored, extra: isScored ? scores.overall_score : null },
+                      { label: "Enhanced", val: hasEnhancedAnalysis },
                     ].map(({ label, val, len, extra }: any) => (
                       <div key={label} className="flex justify-between items-center">
                         <span className="text-zinc-500 text-[10px]">{label}:</span>

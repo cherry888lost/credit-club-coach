@@ -166,8 +166,28 @@ ${transcript.substring(0, 15000)}
       "technique": "Technique name"
     }
   ],
-  "next_coaching_actions": ["specific coaching action"]
+  "next_coaching_actions": ["specific coaching action"],
+  "coaching_markers": [
+    {
+      "timestamp": "MM:SS",
+      "seconds": 0,
+      "title": "Short descriptive title",
+      "category": "one of the 10 scoring categories",
+      "type": "positive|negative",
+      "severity": "high|medium|low",
+      "note": "1-2 sentence explanation grounded in transcript"
+    }
+  ]
 }
+
+## Coaching Markers Instructions
+
+Extract 5-10 key coaching moments from the transcript — specific timestamps where something notable happened (good or bad):
+- Strong rapport moments, missed discovery, weak objection handling, strong close attempts, missed close opportunities, good pain amplification, poor offer explanation, good urgency creation, weak next steps
+- Each marker MUST be grounded in actual transcript content
+- Use real timestamps if available; if not, estimate approximate position and prefix with "~"
+- Do NOT hallucinate timestamps — if timing is truly unknown, use "00:00" with seconds=0
+- 5-10 most useful moments, mix of positive and negative, severity=high for critical moments
 
 CRITICAL RULES:
 - Be honest and critical — inflate nothing

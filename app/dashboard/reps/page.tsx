@@ -69,28 +69,28 @@ export default async function RepsPage({
   const orgId = await getDefaultOrgId();
   const sortBy = params.sort || "score";
 
-  // Get all reps
+  // Get all reps — only show actual sales reps (closer/sdr)
   const { data: reps } = await supabase
     .from("reps")
     .select("id, name, email, role, sales_role, status")
     .eq("org_id", orgId)
+    .in("sales_role", ["closer", "sdr"])
     .order("name");
 
-  // Get all production calls with scores
+  // Get all production calls with scores (excluding soft-deleted)
   const { data: callsWithScores } = await supabase
     .from("calls")
     .select(`
       id,
       rep_id,
-      source,
       call_scores(
         overall_score,
-        outcome,
-        manual_outcome
+        score_total,
+        close_outcome
       )
     `)
     .eq("org_id", orgId)
-    .neq("source", "demo");
+    .is("deleted_at", null); // CRITICAL: Exclude soft-deleted calls
 
   // Calculate stats per rep
   const repPerf: Record<string, { scores: number[]; closed: number; followUp: number; noSale: number; callCount: number }> = {};
@@ -108,11 +108,12 @@ export default async function RepsPage({
     const cs = (call as any).call_scores;
     if (!cs) continue;
 
-    if (cs.overall_score != null) {
-      repPerf[repId].scores.push(cs.overall_score);
+    const effectiveScore = cs.overall_score ?? cs.score_total;
+    if (effectiveScore != null) {
+      repPerf[repId].scores.push(effectiveScore);
     }
 
-    const outcome = cs.manual_outcome || cs.outcome;
+    const outcome = cs.close_outcome;
     if (outcome === "closed") repPerf[repId].closed++;
     else if (outcome === "follow_up") repPerf[repId].followUp++;
     else if (outcome === "no_sale") repPerf[repId].noSale++;

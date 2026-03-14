@@ -209,11 +209,11 @@ export async function POST(request: NextRequest) {
       console.log(`[WEBHOOK ${requestId}] Using fixed default org ${orgId}`);
     }
     
-    // Check if call already exists (idempotency)
+    // Check if call already exists (including soft-deleted)
     console.log(`[WEBHOOK ${requestId}] Checking for existing call with fathom_call_id: ${fathomCallId}`);
     const { data: existingCall, error: existingError } = await supabase
       .from("calls")
-      .select("id, created_at")
+      .select("id, created_at, deleted_at")
       .eq("fathom_call_id", fathomCallId)
       .single();
     
@@ -221,7 +221,82 @@ export async function POST(request: NextRequest) {
       console.error(`[WEBHOOK ${requestId}] Error checking existing call:`, existingError);
     }
     
+    // Handle existing call (including soft-deleted ones)
     if (existingCall) {
+      // If call is soft-deleted, undelete it to preserve new data
+      if (existingCall.deleted_at) {
+        console.log(`[WEBHOOK ${requestId}] Call ${fathomCallId} was previously deleted (deleted_at: ${existingCall.deleted_at}), undeleting...`);
+        
+        const { error: undeleteError } = await supabase
+          .from("calls")
+          .update({ 
+            deleted_at: null,
+            // Update other fields in case they changed
+            title: title,
+            occurred_at: occurredAt,
+            transcript: transcript,
+            recording_url: recordingUrl,
+            metadata: {
+              ...payload.metadata,
+              _webhook: {
+                received_at: timestamp,
+                request_id: requestId,
+                raw_payload: payload,
+                undeleted_from: existingCall.deleted_at,
+              },
+            },
+          })
+          .eq("id", existingCall.id);
+        
+        if (undeleteError) {
+          console.error(`[WEBHOOK ${requestId}] Failed to undelete call:`, undeleteError);
+          addLog({
+            timestamp,
+            fathom_call_id: fathomCallId,
+            event: "undelete_failed",
+            error: undeleteError.message,
+            details: { existingCallId: existingCall.id },
+          });
+          return NextResponse.json(
+            { 
+              error: "Failed to restore deleted call", 
+              requestId,
+              details: undeleteError.message 
+            },
+            { status: 500 }
+          );
+        }
+        
+        addLog({
+          timestamp,
+          fathom_call_id: fathomCallId,
+          event: "call_undeleted",
+          details: { 
+            callId: existingCall.id, 
+            orgId, 
+            repId,
+            title,
+            previouslyDeletedAt: existingCall.deleted_at,
+          },
+        });
+        
+        console.log(`[WEBHOOK ${requestId}] Successfully undeleted call ${existingCall.id}`);
+        
+        return NextResponse.json(
+          { 
+            message: "Call restored and updated successfully", 
+            requestId,
+            callId: existingCall.id,
+            fathomCallId: fathomCallId,
+            orgId,
+            repId,
+            undeleted: true,
+          },
+          { status: 200 }
+        );
+      }
+      
+      // Call exists and is not deleted - skip as before
       console.log(`[WEBHOOK ${requestId}] Call ${fathomCallId} already exists (id: ${existingCall.id}), skipping`);
       addLog({
         timestamp,
@@ -287,33 +362,28 @@ export async function POST(request: NextRequest) {
     
     console.log(`[WEBHOOK ${requestId}] Successfully inserted call ${newCall.id} with fathom_id ${fathomCallId}`);
     
-    // Create placeholder call_scores row
-    const { error: scoreError } = await supabase
-      .from("call_scores")
-      .insert({
-        call_id: newCall.id,
-        opening_score: null,
-        discovery_score: null,
-        rapport_score: null,
-        objection_handling_score: null,
-        closing_score: null,
-        structure_score: null,
-        product_knowledge_score: null,
-        ai_summary: null,
-        ai_summary_short: null,
-        strengths: [],
-        improvements: [],
-        coaching_recommendation: null,
-        example_phrase: null,
-        tone_analysis: {},
-        product_concepts_mentioned: [],
-      });
-    
-    if (scoreError) {
-      console.error(`[WEBHOOK ${requestId}] Failed to insert placeholder scores:`, scoreError);
-      // Don't fail the webhook if scores insert fails
+    // Auto-enqueue scoring request if transcript is long enough (>500 chars)
+    if (transcript && transcript.length >= 500) {
+      const { data: scoringReq, error: scoreError } = await supabase
+        .from("scoring_requests")
+        .insert({
+          call_id: newCall.id,
+          status: "pending",
+          transcript: transcript,
+          rep_name: repId ? (await supabase.from("reps").select("name").eq("id", repId).single())?.data?.name ?? null : null,
+          call_title: title ?? null,
+          call_date: occurredAt ?? null,
+        })
+        .select("id")
+        .single();
+
+      if (scoreError) {
+        console.error(`[WEBHOOK ${requestId}] Failed to enqueue scoring:`, scoreError);
+      } else {
+        console.log(`[WEBHOOK ${requestId}] Auto-enqueued scoring request ${scoringReq.id} for call ${newCall.id}`);
+      }
     } else {
-      console.log(`[WEBHOOK ${requestId}] Created placeholder scores for call ${newCall.id}`);
+      console.log(`[WEBHOOK ${requestId}] Transcript too short for auto-scoring (${transcript?.length || 0} chars)`);
     }
     
     addLog({
