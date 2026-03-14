@@ -126,7 +126,8 @@ export default async function CallsPage({
   // Get scores for lookup
   const { data: scoresData } = await supabase
     .from("call_scores")
-    .select("call_id, overall_score, score_total, close_outcome, score_grade");
+    .select("call_id, overall_score, score_total, close_outcome, score_grade")
+    .eq("org_id", orgId);
 
   const scoreMap = new Map(
     scoresData?.map((s) => [

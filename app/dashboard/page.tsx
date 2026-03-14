@@ -69,7 +69,8 @@ export default async function DashboardPage() {
   
   const { data: allScoresData } = await supabase
     .from("call_scores")
-    .select("call_id, overall_score, score_total");
+    .select("call_id, overall_score, score_total")
+    .eq("org_id", orgId);
   
   const scoreMap = new Map(allScoresData?.map(s => [s.call_id, s.overall_score ?? s.score_total]) || []);
   

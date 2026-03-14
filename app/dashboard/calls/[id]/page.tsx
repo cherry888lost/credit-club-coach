@@ -91,6 +91,23 @@ function qualityBadge(label: string) {
   return styles[label] || styles.average;
 }
 
+// Helper to safely render objection items that may be strings or objects
+function formatObjection(o: unknown): string {
+  if (typeof o === "string") return o;
+  if (o && typeof o === "object") {
+    const obj = o as Record<string, unknown>;
+    // Enhanced format: { type, quote, response, timestamp, handling_score }
+    if (obj.type && obj.quote) {
+      return `${obj.type}: "${obj.quote}"`;
+    }
+    // Fallback: show type or stringify
+    if (obj.type) return String(obj.type);
+    if (obj.label) return String(obj.label);
+    return JSON.stringify(o);
+  }
+  return String(o);
+}
+
 function gradeColor(grade: string): string {
   if (grade.startsWith("A")) return "text-green-600 dark:text-green-400";
   if (grade.startsWith("B")) return "text-blue-600 dark:text-blue-400";
@@ -745,12 +762,12 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                     </h4>
                   </div>
                   <ul className="space-y-1">
-                    {scores.objections_detected.map((o: string, i: number) => (
+                    {scores.objections_detected.map((o: unknown, i: number) => (
                       <li
                         key={i}
                         className="text-sm px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-700 dark:text-zinc-300"
                       >
-                        {o}
+                        {formatObjection(o)}
                       </li>
                     ))}
                   </ul>
@@ -767,12 +784,12 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                     </h4>
                   </div>
                   <ul className="space-y-1">
-                    {scores.objections_handled_well.map((o: string, i: number) => (
+                    {scores.objections_handled_well.map((o: unknown, i: number) => (
                       <li
                         key={i}
                         className="text-sm px-2.5 py-1.5 bg-green-50 dark:bg-green-900/20 rounded text-green-700 dark:text-green-400"
                       >
-                        {o}
+                        {formatObjection(o)}
                       </li>
                     ))}
                   </ul>
@@ -789,12 +806,12 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                     </h4>
                   </div>
                   <ul className="space-y-1">
-                    {scores.objections_missed.map((o: string, i: number) => (
+                    {scores.objections_missed.map((o: unknown, i: number) => (
                       <li
                         key={i}
                         className="text-sm px-2.5 py-1.5 bg-red-50 dark:bg-red-900/20 rounded text-red-700 dark:text-red-400"
                       >
-                        {o}
+                        {formatObjection(o)}
                       </li>
                     ))}
                   </ul>
@@ -825,8 +842,8 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                     </h4>
                   </div>
                   <ul className="space-y-1">
-                    {scores.objections_detected.map((o: string, i: number) => (
-                      <li key={i} className="text-sm px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-700 dark:text-zinc-300">{o}</li>
+                    {scores.objections_detected.map((o: unknown, i: number) => (
+                      <li key={i} className="text-sm px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-700 dark:text-zinc-300">{formatObjection(o)}</li>
                     ))}
                   </ul>
                 </div>
@@ -838,8 +855,8 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                     <h4 className="text-sm font-medium text-green-700 dark:text-green-400">Handled Well</h4>
                   </div>
                   <ul className="space-y-1">
-                    {scores.objections_handled_well.map((o: string, i: number) => (
-                      <li key={i} className="text-sm px-2.5 py-1.5 bg-green-50 dark:bg-green-900/20 rounded text-green-700 dark:text-green-400">{o}</li>
+                    {scores.objections_handled_well.map((o: unknown, i: number) => (
+                      <li key={i} className="text-sm px-2.5 py-1.5 bg-green-50 dark:bg-green-900/20 rounded text-green-700 dark:text-green-400">{formatObjection(o)}</li>
                     ))}
                   </ul>
                 </div>
@@ -851,8 +868,8 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                     <h4 className="text-sm font-medium text-red-700 dark:text-red-400">Missed / Unresolved</h4>
                   </div>
                   <ul className="space-y-1">
-                    {scores.objections_missed.map((o: string, i: number) => (
-                      <li key={i} className="text-sm px-2.5 py-1.5 bg-red-50 dark:bg-red-900/20 rounded text-red-700 dark:text-red-400">{o}</li>
+                    {scores.objections_missed.map((o: unknown, i: number) => (
+                      <li key={i} className="text-sm px-2.5 py-1.5 bg-red-50 dark:bg-red-900/20 rounded text-red-700 dark:text-red-400">{formatObjection(o)}</li>
                     ))}
                   </ul>
                 </div>

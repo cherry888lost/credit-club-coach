@@ -16,7 +16,10 @@ export async function GET(request: NextRequest) {
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { searchParams } = new URL(request.url);
-  const status = searchParams.get('status') || 'pending_review';
+  const rawStatus = searchParams.get('status') || 'pending_review';
+  // Map frontend status names to DB values
+  // DB uses 'pending'; frontend uses 'pending_review'
+  const status = rawStatus === 'pending_review' ? 'pending' : rawStatus;
   const category = searchParams.get('category');
   const limit = parseInt(searchParams.get('limit') || '50');
   const offset = parseInt(searchParams.get('offset') || '0');

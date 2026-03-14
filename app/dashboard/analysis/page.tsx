@@ -91,13 +91,22 @@ function roleBadge(role: string | null) {
   );
 }
 
-function countFrequency(arrays: (string[] | null)[]): [string, number][] {
+function countFrequency(arrays: (unknown[] | null)[]): [string, number][] {
   const counts: Record<string, number> = {};
   for (const arr of arrays) {
     if (!arr) continue;
     for (const item of arr) {
       if (!item) continue;
-      const key = item.trim();
+      // Handle both string items and object items (e.g. { type: "pricing", quote: "..." })
+      let key: string;
+      if (typeof item === "string") {
+        key = item.trim();
+      } else if (typeof item === "object" && item !== null) {
+        const obj = item as Record<string, unknown>;
+        key = String(obj.type || obj.label || obj.quote || "").trim();
+      } else {
+        key = String(item).trim();
+      }
       if (key) counts[key] = (counts[key] || 0) + 1;
     }
   }
@@ -164,10 +173,16 @@ export default async function AnalysisPage({
     .is("deleted_at", null); // CRITICAL: Exclude soft-deleted calls
 
   // Build scored calls list (only calls that have scores)
+  // call_scores may be returned as array or object depending on Supabase FK constraints
   const scoredCalls = (weekCalls || [])
-    .filter((c: any) => c.call_scores)
+    .filter((c: any) => {
+      const cs = c.call_scores;
+      if (!cs) return false;
+      if (Array.isArray(cs)) return cs.length > 0;
+      return true;
+    })
     .map((c: any) => {
-      const s = c.call_scores;
+      const s = Array.isArray(c.call_scores) ? c.call_scores[0] : c.call_scores;
       return {
         id: c.id,
         title: c.title,

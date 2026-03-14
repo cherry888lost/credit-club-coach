@@ -21,19 +21,19 @@ import {
 
 interface LearningQueueItem {
   id: string;
-  source_call_id: string;
-  source_rep_name: string | null;
-  pattern_category: string;
-  exact_quote: string;
-  explanation: string;
-  suggested_action: string | null;
-  ai_confidence: number;
+  call_id: string;
+  rep_name: string | null;
+  pattern_type: string;
+  quote: string;
+  context: string;
+  technique_score: number | null;
+  confidence: number;
   status: string;
-  review_notes: string | null;
+  notes: string | null;
   created_at: string;
   calls?: {
     title: string | null;
-    occurred_at: string | null;
+    call_date: string | null;
   } | null;
 }
 
@@ -48,11 +48,16 @@ const CATEGORY_LABELS: Record<string, string> = {
   discovery: "Discovery",
   pain_amplification: "Pain Amplification",
   rapport_tone: "Rapport & Tone",
+  rapport_building: "Rapport Building",
   authority_confidence: "Authority & Confidence",
   offer_explanation: "Offer Explanation",
   objection_handling: "Objection Handling",
+  objection_handling_pricing: "Objection: Pricing",
+  objection_handling_think: "Objection: Think About It",
   urgency: "Urgency",
+  urgency_creation: "Urgency Creation",
   close_attempt: "Close Attempt",
+  closing_phrase: "Closing Phrase",
   follow_up_quality: "Follow-Up Quality",
   disqualification_logic: "Disqualification Logic",
   new_objection: "New Objection",
@@ -116,7 +121,8 @@ function formatDate(dateStr: string | null) {
 }
 
 function ConfidenceBadge({ confidence }: { confidence: number }) {
-  const pct = Math.round(confidence * 100);
+  // DB stores confidence as integer (85) or decimal (0.85)
+  const pct = confidence > 1 ? Math.round(confidence) : Math.round(confidence * 100);
   const colorClass =
     pct >= 85
       ? "bg-green-50 dark:bg-green-950/50 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800/50"
@@ -174,7 +180,7 @@ export default function LearningQueuePage() {
       let filtered = itemsData.data || [];
       if (repFilter) {
         filtered = filtered.filter((i: LearningQueueItem) =>
-          i.source_rep_name?.toLowerCase().includes(repFilter.toLowerCase())
+          i.rep_name?.toLowerCase().includes(repFilter.toLowerCase())
         );
       }
 
@@ -379,7 +385,7 @@ export default function LearningQueuePage() {
         <div className="space-y-3">
           {items.map((item) => {
             const CategoryIcon =
-              CATEGORY_ICONS[item.pattern_category] || Brain;
+              CATEGORY_ICONS[item.pattern_type] || Brain;
             return (
               <div
                 key={item.id}
@@ -391,12 +397,12 @@ export default function LearningQueuePage() {
                     <div className="flex items-center gap-2 mb-3 flex-wrap">
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/50">
                         <CategoryIcon className="w-3 h-3" />
-                        {CATEGORY_LABELS[item.pattern_category] ||
-                          item.pattern_category}
+                        {CATEGORY_LABELS[item.pattern_type] ||
+                          item.pattern_type}
                       </span>
-                      <ConfidenceBadge confidence={item.ai_confidence} />
+                      <ConfidenceBadge confidence={item.confidence} />
                       <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                        {item.source_rep_name || "Unknown rep"}
+                        {item.rep_name || "Unknown rep"}
                       </span>
                       <span className="text-xs text-zinc-400 dark:text-zinc-500">
                         {timeAgo(item.created_at)}
@@ -406,22 +412,22 @@ export default function LearningQueuePage() {
                     {/* Quote */}
                     <blockquote className="text-sm font-medium text-zinc-900 dark:text-zinc-100 mb-2 border-l-2 border-indigo-500 dark:border-indigo-400 pl-3">
                       &ldquo;
-                      {item.exact_quote.length > 200
-                        ? item.exact_quote.slice(0, 200) + "..."
-                        : item.exact_quote}
+                      {item.quote.length > 200
+                        ? item.quote.slice(0, 200) + "..."
+                        : item.quote}
                       &rdquo;
                     </blockquote>
 
                     {/* Explanation */}
                     <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-2">
-                      {item.explanation}
+                      {item.context}
                     </p>
 
-                    {/* Suggested Action */}
-                    {item.suggested_action && (
+                    {/* Technique Score */}
+                    {item.technique_score != null && (
                       <p className="text-sm text-indigo-600 dark:text-indigo-400">
-                        <span className="font-medium">Suggested:</span>{" "}
-                        {item.suggested_action}
+                        <span className="font-medium">Category Score:</span>{" "}
+                        {item.technique_score}/10
                       </p>
                     )}
 
@@ -430,21 +436,21 @@ export default function LearningQueuePage() {
                       <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-2">
                         From:{" "}
                         <Link
-                          href={`/dashboard/calls/${item.source_call_id}`}
+                          href={`/dashboard/calls/${item.call_id}`}
                           className="text-indigo-600 dark:text-indigo-400 hover:underline"
                         >
                           {item.calls.title}
                         </Link>
-                        {item.calls.occurred_at &&
-                          ` · ${formatDate(item.calls.occurred_at)}`}
+                        {item.calls?.call_date &&
+                          ` · ${formatDate(item.calls?.call_date)}`}
                       </p>
                     )}
 
                     {/* Review notes */}
-                    {item.review_notes && (
+                    {item.notes && (
                       <div className="mt-3 p-3 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg text-sm text-zinc-700 dark:text-zinc-300 border border-zinc-100 dark:border-zinc-800">
                         <span className="font-medium">Review notes:</span>{" "}
-                        {item.review_notes}
+                        {item.notes}
                       </div>
                     )}
                   </div>

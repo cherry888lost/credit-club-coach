@@ -333,7 +333,7 @@ export async function saveCandidatePatterns(
         relevant_category_score: pattern.relevant_category_score,
         reason_for_queueing: pattern.reason_for_queueing,
         
-        status: 'pending_review',
+        status: 'pending',
       });
 
     if (error) {
@@ -365,7 +365,7 @@ export async function approvePattern(
       review_notes: notes || null,
     })
     .eq('id', patternId)
-    .eq('status', 'pending_review');
+    .eq('status', 'pending');
 
   if (error) return { success: false, error: error.message };
   return { success: true };
@@ -386,7 +386,7 @@ export async function rejectPattern(
       review_notes: notes || null,
     })
     .eq('id', patternId)
-    .eq('status', 'pending_review');
+    .eq('status', 'pending');
 
   if (error) return { success: false, error: error.message };
   return { success: true };

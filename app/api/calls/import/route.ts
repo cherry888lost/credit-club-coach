@@ -77,21 +77,17 @@ export async function POST(request: NextRequest) {
   }
 
   // Create call record
-  const callPayload = {
+  // NOTE: metadata column may not exist on all DB instances; store import
+  // context in fields the table definitely has (rep_name, call_date, source).
+  const callPayload: Record<string, unknown> = {
     org_id: DEFAULT_ORG_ID,
     rep_id: rep.id,
     title: title.trim(),
-    occurred_at: occurred_at || new Date().toISOString(),
+    call_date: occurred_at ? new Date(occurred_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
     duration_seconds: duration_seconds || null,
     transcript: transcript.trim(),
-    recording_url: recording_url || null,
-    source: "manual" as const,
-    metadata: {
-      imported_by: user.userId,
-      import_notes: notes || null,
-      outcome_hint: outcome_hint || null,
-      close_type_hint: close_type_hint || null,
-    },
+    source_url: recording_url || null,
+    rep_name: rep.name,
   };
 
   const { data: call, error: callError } = await supabase
@@ -113,15 +109,14 @@ export async function POST(request: NextRequest) {
     const { error: scoringError } = await supabase
       .from("scoring_requests")
       .insert({
-        org_id: DEFAULT_ORG_ID,
         call_id: call.id,
         status: "pending",
-        rubric_type: rep.sales_role === "sdr" ? "sdr" : "closer",
+        call_title: title.trim(),
+        rep_name: rep.name,
+        call_date: callPayload.call_date,
+        duration_seconds: duration_seconds || null,
+        transcript: transcript.trim(),
         requested_by: user.userId,
-        metadata: {
-          outcome_hint: outcome_hint || null,
-          close_type_hint: close_type_hint || null,
-        },
       });
 
     if (scoringError) {
