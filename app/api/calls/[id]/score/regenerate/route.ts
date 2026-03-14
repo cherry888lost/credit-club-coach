@@ -27,14 +27,14 @@ export async function POST(
   try {
     const supabase = await createServiceClient();
 
-    // Check if user is admin
-    const { data: user } = await supabase
-      .from("users")
+    // Check if user is admin via reps table (matches lib/auth.ts pattern)
+    const { data: rep } = await supabase
+      .from("reps")
       .select("role")
-      .eq("clerk_id", userId)
+      .eq("clerk_user_id", userId)
       .single();
 
-    if (user?.role !== "admin") {
+    if (rep?.role !== "admin") {
       return NextResponse.json({ error: "Forbidden - Admin only" }, { status: 403 });
     }
 

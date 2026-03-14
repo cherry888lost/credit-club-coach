@@ -2,7 +2,7 @@
 // Main worker logic: poll → claim → score → write → complete/fail
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { buildScoringPrompt, SCORING_RUBRIC, ScoringResult, CloseType, Outcome, QualityLabel } from './reasoner-prompt';
+import { buildScoringPrompt, SCORING_RUBRIC, ScoringResult, CoachSummary, CloseType, Outcome, QualityLabel } from './reasoner-prompt';
 
 const MODEL_VERSION = 'cherry-reasoner-v1';
 const MIN_TRANSCRIPT_LENGTH = 500;
@@ -217,6 +217,15 @@ export function parseReasonerOutput(raw: string): ScoringResult {
     parsed.low_signal = false;
   }
 
+  // Validate coach_summary (default to empty if missing for backward compat)
+  if (!parsed.coach_summary || typeof parsed.coach_summary !== 'object') {
+    parsed.coach_summary = { did_well: [], needs_work: [], action_items: [] };
+  } else {
+    if (!Array.isArray(parsed.coach_summary.did_well)) parsed.coach_summary.did_well = [];
+    if (!Array.isArray(parsed.coach_summary.needs_work)) parsed.coach_summary.needs_work = [];
+    if (!Array.isArray(parsed.coach_summary.action_items)) parsed.coach_summary.action_items = [];
+  }
+
   // Validate arrays exist
   for (const field of ['strengths', 'weaknesses', 'objections_detected', 'objections_handled_well', 'objections_missed', 'next_coaching_actions']) {
     if (!Array.isArray(parsed[field])) {
@@ -267,26 +276,97 @@ export async function writeScore(
   callId: string,
   requestId: string,
   result: ScoringResult,
+  repName?: string | null,
+  callTitle?: string | null,
 ): Promise<string> {
   const sb = getSupabase(config);
+
+  // Derive enhanced fields from scoring result
+  const grade = result.overall_score >= 90 ? 'A+' : result.overall_score >= 80 ? 'A' : result.overall_score >= 70 ? 'B' : result.overall_score >= 60 ? 'C' : result.overall_score >= 50 ? 'D' : 'F';
+  
+  const cat = (name: string) => (result.categories as any)?.[name]?.score || 0;
+  const scoreBreakdown = {
+    close_quality: Math.round((cat('overall_close_quality') / 10) * 25),
+    objection_handling: Math.round((cat('objection_handling') / 10) * 20),
+    value_stacking: Math.round((cat('offer_explanation') / 10) * 20),
+    urgency_usage: Math.round((cat('urgency_close_attempt') / 10) * 15),
+    discovery_rapport: Math.round(((cat('discovery_quality') + cat('rapport_tone')) / 20) * 10),
+    professionalism: Math.round(((cat('confidence_authority') + cat('call_control')) / 20) * 10),
+  };
+  
+  const closeOutcome = result.outcome === 'closed' ? 'closed' : (result.outcome === 'follow_up' || result.close_type === 'deposit') ? 'follow_up' : 'no_sale';
+  
+  const valueStackingScore = cat('offer_explanation');
+  const urgencyScore = cat('urgency_close_attempt');
+  const objectionHandlingScore = cat('objection_handling');
+  
+  // Extract key quotes from high-scoring categories
+  const keyQuotes: Array<{quote: string; context: string; type: string}> = [];
+  for (const [key, catData] of Object.entries(result.categories || {})) {
+    if ((catData as any).score >= 7 && (catData as any).evidence) {
+      keyQuotes.push({ quote: (catData as any).evidence, context: key.replace(/_/g, ' '), type: 'positive' });
+    }
+  }
+  
+  const techniques = {
+    value_stacking: { score: valueStackingScore, components_used: [] as string[], evidence: [] as string[] },
+    urgency_creation: { score: urgencyScore, types_used: [] as string[], evidence: [] as string[] },
+  };
 
   const row = {
     call_id: callId,
     scoring_request_id: requestId,
+    org_id: '00000000-0000-0000-0000-000000000001',
     model_version: MODEL_VERSION,
+    rep_name: repName || 'Unknown',
+    call_title: callTitle || null,
+    
+    // Core scores
     overall_score: result.overall_score,
+    score_total: result.overall_score,
     quality_label: result.quality_label,
     outcome: result.outcome,
     close_type: result.close_type,
     low_signal: result.low_signal,
+    
+    // Enhanced: grade
+    grade,
+    score_grade: grade,
+    
+    // Enhanced: score breakdown
+    score_breakdown: scoreBreakdown,
+    
+    // Enhanced: close analysis
+    close_outcome: closeOutcome,
+    close_confidence: 70,
+    
+    // Enhanced: techniques
+    techniques_detected: techniques,
+    value_stacking_score: valueStackingScore,
+    urgency_score: urgencyScore,
+    objection_handling_score: objectionHandlingScore,
+    
+    // Categories
     categories: result.categories,
+    
+    // Arrays
     strengths: result.strengths,
     weaknesses: result.weaknesses,
     objections_detected: result.objections_detected,
     objections_handled_well: result.objections_handled_well,
     objections_missed: result.objections_missed,
     next_coaching_actions: result.next_coaching_actions,
+    coaching_feedback: result.next_coaching_actions,
     coaching_markers: result.coaching_markers || [],
+    
+    // Enhanced: detailed data
+    key_quotes: keyQuotes.slice(0, 5),
+    missed_opportunities: [...(result.objections_missed || []), ...(result.weaknesses || [])],
+    
+    // Coach Summary
+    coach_summary: result.coach_summary || { did_well: [], needs_work: [], action_items: [] },
+    
+    status: 'completed',
     created_at: new Date().toISOString(),
   };
 

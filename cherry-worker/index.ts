@@ -75,7 +75,7 @@ export async function processRequest(
     return { scoreId: 'dry-run' };
   }
 
-  const scoreId = await writeScore(config, request.call_id, request.id, result);
+  const scoreId = await writeScore(config, request.call_id, request.id, result, repName);
   console.log(`[PROCESS] Score written: ${scoreId}`);
 
   // 6. Post-scoring hook: extract patterns for controlled learning

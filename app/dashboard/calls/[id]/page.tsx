@@ -234,6 +234,9 @@ export default async function CallDetailPage({ params }: { params: { id: string 
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  // Parse coach summary
+  const coachSummary = scores?.coach_summary as { did_well?: string[]; needs_work?: string[]; action_items?: string[] } | null;
+
   // Parse enhanced fields safely
   const scoreBreakdown = scores?.score_breakdown as Record<string, number> | null;
   const closeAnalysis = scores?.close_analysis as { type?: string; confidence?: number; structure?: any; evidence?: string[] } | null;
@@ -428,6 +431,70 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         hasTranscript={!!call.transcript}
         isAdmin={isAdmin}
       />
+
+      {/* ─── Coach Summary ─── */}
+      {isScored && coachSummary && (coachSummary.did_well?.length || coachSummary.needs_work?.length || coachSummary.action_items?.length) ? (
+        <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-xl border border-indigo-200 dark:border-indigo-800 shadow-sm">
+          <div className="p-4 border-b border-indigo-200 dark:border-indigo-800 flex items-center gap-2">
+            <Award className="w-5 h-5 text-indigo-600" />
+            <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-300">Coach Summary</h3>
+          </div>
+          <div className="p-5 space-y-5">
+            {/* What they did well */}
+            {coachSummary.did_well && coachSummary.did_well.length > 0 && (
+              <div>
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-green-700 dark:text-green-400 mb-2">
+                  <TrendingUp className="w-4 h-4" /> What the rep did well
+                </h4>
+                <ul className="space-y-1.5">
+                  {coachSummary.did_well.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                      <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* What hurt the call */}
+            {coachSummary.needs_work && coachSummary.needs_work.length > 0 && (
+              <div>
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-400 mb-2">
+                  <TrendingDown className="w-4 h-4" /> What hurt the call
+                </h4>
+                <ul className="space-y-1.5">
+                  {coachSummary.needs_work.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                      <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* What to do differently */}
+            {coachSummary.action_items && coachSummary.action_items.length > 0 && (
+              <div>
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-indigo-700 dark:text-indigo-400 mb-2">
+                  <Lightbulb className="w-4 h-4" /> What to do differently next time
+                </h4>
+                <ul className="space-y-1.5">
+                  {coachSummary.action_items.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                      <span className="flex items-center justify-center w-5 h-5 rounded-full bg-indigo-200 dark:bg-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-bold flex-shrink-0 mt-0.5">
+                        {i + 1}
+                      </span>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {/* ═══════════════════════════════════════════════════════════════
            ENHANCED ANALYSIS SECTIONS (shown when enhanced data available)
@@ -633,37 +700,32 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         </div>
       )}
 
-      {/* Also show legacy categories below enhanced if both exist */}
+      {/* Category Scores (shown below enhanced breakdown as collapsible detail) */}
       {isScored && categories && hasEnhancedAnalysis && (
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-          <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
-            <Target className="w-5 h-5 text-zinc-500" />
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Category Scores</h3>
-          </div>
-
-          <div className="p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            {Object.entries(categories).map(([key, cat]) => (
-              <div
-                key={key}
-                className={`rounded-lg p-4 text-center ${scoreBgColor(cat.score)}`}
-              >
-                <div className={`text-2xl font-bold ${scoreColor(cat.score)}`}>
-                  {cat.score}
-                </div>
-                <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 leading-tight">
-                  {CATEGORY_LABELS[key] || key}
-                </p>
+          <details className="group">
+            <summary className="p-4 flex items-center gap-2 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 rounded-xl transition-colors">
+              <ChevronDown className="w-5 h-5 text-zinc-400 transition-transform group-open:rotate-180" />
+              <Target className="w-5 h-5 text-zinc-500" />
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Category Scores (10 categories)</h3>
+            </summary>
+            <div className="px-4 pb-4 border-t border-zinc-200 dark:border-zinc-800">
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                {Object.entries(categories).map(([key, cat]) => (
+                  <div
+                    key={key}
+                    className={`rounded-lg p-4 text-center ${scoreBgColor(cat.score)}`}
+                  >
+                    <div className={`text-2xl font-bold ${scoreColor(cat.score)}`}>
+                      {cat.score}
+                    </div>
+                    <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 leading-tight">
+                      {CATEGORY_LABELS[key] || key}
+                    </p>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-
-          <div className="px-4 pb-4">
-            <details className="group">
-              <summary className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400 cursor-pointer hover:text-zinc-700 dark:hover:text-zinc-300 py-2">
-                <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
-                Detailed category analysis
-              </summary>
-              <div className="mt-2 space-y-3">
+              <div className="mt-4 space-y-3">
                 {Object.entries(categories).map(([key, cat]) => (
                   <div
                     key={key}
@@ -694,8 +756,8 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                   </div>
                 ))}
               </div>
-            </details>
-          </div>
+            </div>
+          </details>
         </div>
       )}
 

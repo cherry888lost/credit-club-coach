@@ -36,11 +36,18 @@ interface CategoryScore {
   evidence: string;
 }
 
+interface CoachSummary {
+  did_well: string[];
+  needs_work: string[];
+  action_items: string[];
+}
+
 interface ScoringResult {
   overall_score: number;
   quality_label: 'poor' | 'average' | 'strong' | 'elite';
   outcome: 'closed' | 'follow_up' | 'no_sale' | 'disqualified';
   close_type: 'deposit' | 'full_close' | 'partial_access' | 'payment_plan' | null;
+  coach_summary: CoachSummary;
   categories: Record<string, CategoryScore>;
   strengths: string[];
   weaknesses: string[];
@@ -225,28 +232,99 @@ async function claimRequest(config: WorkerConfig, requestId: string): Promise<bo
   }
 }
 
+// ── Knowledge Base Loading ────────────────────────────────────────────────────
+
+import { readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
+
+const KB_ROOT = join(process.env.HOME || '/Users/papur', 'credit-club-kb');
+
+function loadKBDir(subdir: string): string {
+  try {
+    const dir = join(KB_ROOT, subdir);
+    const files = readdirSync(dir).filter(f => f.endsWith('.md')).sort();
+    return files.map(f => {
+      const content = readFileSync(join(dir, f), 'utf-8');
+      return `### ${f.replace('.md', '').replace(/_/g, ' ').toUpperCase()}\n${content}`;
+    }).join('\n\n---\n\n');
+  } catch {
+    return '';
+  }
+}
+
+let _kbCache: { closes: string; objections: string; techniques: string; pricing: string } | null = null;
+
+function getKB() {
+  if (!_kbCache) {
+    _kbCache = {
+      closes: loadKBDir('closes'),
+      objections: loadKBDir('objections'),
+      techniques: loadKBDir('techniques'),
+      pricing: loadKBDir('pricing'),
+    };
+  }
+  return _kbCache;
+}
+
 // ── Step 3: Build scoring prompt ─────────────────────────────────────────────
 
 function buildPrompt(transcript: string, repName?: string | null): string {
   const agentCtx = repName ? `The sales agent's name is "${repName}".` : '';
+  const kb = getKB();
 
-  return `You are an expert sales call analyst for Credit Club, a premium credit repair and financial optimization service. ${agentCtx}
+  return `You are an expert sales call analyst and coach for Credit Club, a UK-focused credit, business-card, points-and-travel education and implementation programme. ${agentCtx}
 
 ## Product Context — Credit Club
 
-Credit Club helps clients improve their credit scores through:
-- Dispute processing with all three bureaus (Equifax, Experian, TransUnion)
-- Debt negotiation and settlement strategies
-- Credit building via authorized-user tradelines
-- Financial coaching and budgeting plans
-- Identity theft resolution
-- Business credit building programs
+Credit Club helps UK clients:
+- Improve/rebuild credit profiles and remove negative items
+- Get approved for American Express, business cards, and premium credit products
+- Master points, miles, Avios, hotel redemptions, business/first-class travel
+- Full implementation programme (not just content): Skool community + training + 1-on-1 Telegram support
+- Price: £3,000 standard | Deposits: £300-500 | Payment plans available
 
-Typical packages range from $500–$3,000 upfront or $99–$299/month. Closers aim to collect a deposit ($200–$500) or full payment on the first call. The ideal call follows: rapport → discovery → pain amplification → offer presentation → objection handling → close attempt → next steps.
+The ideal call follows: rapport → discovery → pain amplification → offer presentation → objection handling → close attempt → next steps.
 
-## Your Task
+## Close Types
+- full_close: Full £3,000 paid on call
+- deposit: Partial payment (£300-500) to secure place, remainder later
+- payment_plan: Installment arrangement (e.g. £2,000 + £1,000)
+- partial_access: £500 upfront, £2,500 after card approval (with refund guarantee)
+- null: No close occurred
 
-Analyze the following sales call transcript and produce a detailed scoring assessment.
+================================================================================
+KNOWLEDGE BASE: CLOSE PATTERNS (Benchmark Examples)
+================================================================================
+Compare the transcript against these real close examples:
+
+${kb.closes}
+
+================================================================================
+KNOWLEDGE BASE: OBJECTION HANDLING PATTERNS
+================================================================================
+Score the rep's objection handling against these benchmarks:
+
+${kb.objections}
+
+================================================================================
+KNOWLEDGE BASE: SALES TECHNIQUES (Value Stacking & Urgency)
+================================================================================
+Did the rep use these techniques effectively?
+
+${kb.techniques}
+
+================================================================================
+KNOWLEDGE BASE: PRICING PSYCHOLOGY
+================================================================================
+How did the rep handle pricing? Compare against these patterns:
+
+${kb.pricing}
+
+================================================================================
+YOUR TASK
+================================================================================
+
+Analyze the transcript below. Compare the rep's performance against the knowledge base patterns above.
 
 ## Scoring Rubric — 10 Categories (0–10 each)
 
@@ -256,12 +334,36 @@ For each category, assign an integer score 0–10, explain your reasoning in 1�
 2. **discovery_quality** — Did the agent ask probing questions to understand the client's situation, goals, and timeline?
 3. **call_control** — Did the agent guide the conversation or let the prospect ramble?
 4. **pain_amplification** — Did the agent deepen the emotional impact of the prospect's credit problems?
-5. **offer_explanation** — Was the Credit Club offer clearly explained? Benefits tied to specific pain points?
-6. **objection_handling** — How well did the agent address concerns (price, timing, trust, spouse, etc.)?
-7. **urgency_close_attempt** — Did the agent create urgency? Did they actually ask for the sale?
+5. **offer_explanation** — Was the Credit Club offer clearly explained? Benefits tied to specific pain points? Value stack used?
+6. **objection_handling** — How well did the agent address concerns? Compare against KB objection patterns (price, timing, trust, spouse, need-to-think).
+7. **urgency_close_attempt** — Did the agent create legitimate urgency? Did they actually ask for the sale?
 8. **confidence_authority** — Did the agent sound confident, knowledgeable, and authoritative?
-9. **next_steps_clarity** — Were clear next steps established?
-10. **overall_close_quality** — Holistic assessment of the close attempt.
+9. **next_steps_clarity** — Were clear next steps established with specific dates/actions?
+10. **overall_close_quality** — Holistic assessment: did they close, attempt to close, offer alternatives (deposit/plan)?
+
+## SCORING BEHAVIOR
+
+**REWARD:** strong discovery, pain amplification, clear value stack, precise objection handling (isolate→empathize→reframe), clear close ask, deposit/commitment attempt, specific next steps, confidence
+**PENALIZE:** generic rapport, weak discovery, no pain amplification, no close ask, no commitment attempt, vague next steps, soft objection handling, fake urgency, missing deposit attempt
+
+## OUTPUT QUALITY REQUIREMENTS
+
+Your output MUST include:
+1. What the rep did well — cite specific transcript moments
+2. What the rep did poorly — cite specific transcript moments
+3. Exact moments that reduced close chance
+4. Every objection that came up with verbatim quotes
+5. Whether each objection was handled or missed
+6. Whether the close was asked clearly
+7. Whether deposit/commitment/payment plan was attempted
+8. What the rep should have said/done differently (reference KB patterns)
+
+## Coach Summary
+
+Generate a coach_summary with:
+1. did_well: 2-4 specific things with transcript evidence
+2. needs_work: 2-4 specific weaknesses with transcript evidence
+3. action_items: 2-4 specific actions for next time (reference KB techniques)
 
 ## Classification
 
@@ -278,6 +380,11 @@ Return ONLY valid JSON (no markdown fences, no commentary):
   "quality_label": "<poor|average|strong|elite>",
   "outcome": "<closed|follow_up|no_sale|disqualified>",
   "close_type": "<deposit|full_close|partial_access|payment_plan>" or null,
+  "coach_summary": {
+    "did_well": ["<specific with evidence>", ...],
+    "needs_work": ["<specific weakness with evidence>", ...],
+    "action_items": ["<specific action referencing KB>", ...]
+  },
   "categories": {
     "rapport_tone": { "score": <0-10>, "reasoning": "...", "evidence": "..." },
     "discovery_quality": { "score": <0-10>, "reasoning": "...", "evidence": "..." },
@@ -290,12 +397,12 @@ Return ONLY valid JSON (no markdown fences, no commentary):
     "next_steps_clarity": { "score": <0-10>, "reasoning": "...", "evidence": "..." },
     "overall_close_quality": { "score": <0-10>, "reasoning": "...", "evidence": "..." }
   },
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "objections_detected": ["..."],
-  "objections_handled_well": ["..."],
-  "objections_missed": ["..."],
-  "next_coaching_actions": ["..."],
+  "strengths": ["<specific with transcript evidence>"],
+  "weaknesses": ["<specific with transcript evidence>"],
+  "objections_detected": ["<objection with verbatim quote>"],
+  "objections_handled_well": ["<what rep said that worked>"],
+  "objections_missed": ["<what they should have done per KB>"],
+  "next_coaching_actions": ["<specific actionable tip referencing KB>"],
   "coaching_markers": [
     {
       "timestamp": "MM:SS",
@@ -312,7 +419,8 @@ Return ONLY valid JSON (no markdown fences, no commentary):
 IMPORTANT:
 - Return ONLY the JSON object, no other text
 - Be honest and critical — most calls score 40–70
-- Use actual transcript quotes as evidence
+- Use actual transcript quotes as evidence — no generic filler
+- Compare against KB patterns for scoring
 - If no close occurred, set close_type to null (not the string "null")
 
 ## Transcript
@@ -447,6 +555,15 @@ function validateAndParse(raw: string): ScoringResult {
   if (!Array.isArray(parsed.next_coaching_actions)) parsed.next_coaching_actions = [];
   if (!Array.isArray(parsed.coaching_markers)) parsed.coaching_markers = [];
 
+  // Coach summary — default to empty if missing
+  if (!parsed.coach_summary || typeof parsed.coach_summary !== 'object') {
+    parsed.coach_summary = { did_well: [], needs_work: [], action_items: [] };
+  } else {
+    if (!Array.isArray(parsed.coach_summary.did_well)) parsed.coach_summary.did_well = [];
+    if (!Array.isArray(parsed.coach_summary.needs_work)) parsed.coach_summary.needs_work = [];
+    if (!Array.isArray(parsed.coach_summary.action_items)) parsed.coach_summary.action_items = [];
+  }
+
   return parsed as ScoringResult;
 }
 
@@ -457,23 +574,87 @@ async function writeScore(
   callId: string,
   requestId: string,
   result: ScoringResult,
+  repName?: string | null,
+  callTitle?: string | null,
 ): Promise<string> {
+  // Derive enhanced fields
+  const grade = result.overall_score >= 90 ? 'A+' : result.overall_score >= 80 ? 'A' : result.overall_score >= 70 ? 'B' : result.overall_score >= 60 ? 'C' : result.overall_score >= 50 ? 'D' : 'F';
+  
+  const catScore = (name: string) => (result.categories as any)?.[name]?.score || 0;
+  const scoreBreakdown = {
+    close_quality: Math.round((catScore('overall_close_quality') / 10) * 25),
+    objection_handling: Math.round((catScore('objection_handling') / 10) * 20),
+    value_stacking: Math.round((catScore('offer_explanation') / 10) * 20),
+    urgency_usage: Math.round((catScore('urgency_close_attempt') / 10) * 15),
+    discovery_rapport: Math.round(((catScore('discovery_quality') + catScore('rapport_tone')) / 20) * 10),
+    professionalism: Math.round(((catScore('confidence_authority') + catScore('call_control')) / 20) * 10),
+  };
+  
+  const closeOutcome = result.outcome === 'closed' ? 'closed' : (result.outcome === 'follow_up' || result.close_type === 'deposit') ? 'follow_up' : 'no_sale';
+  
+  const keyQuotes: Array<{quote: string; context: string; type: string}> = [];
+  for (const [key, catData] of Object.entries(result.categories || {})) {
+    if ((catData as any).score >= 7 && (catData as any).evidence) {
+      keyQuotes.push({ quote: (catData as any).evidence, context: key.replace(/_/g, ' '), type: 'positive' });
+    }
+  }
+
   const row = {
     call_id: callId,
     scoring_request_id: requestId,
+    org_id: DEFAULT_ORG_ID,
     model_version: MODEL_VERSION,
+    rep_name: repName || 'Unknown',
+    call_title: callTitle || 'Untitled',
+    
+    // Core scores
     overall_score: result.overall_score,
+    score_total: result.overall_score,
     quality_label: result.quality_label,
     outcome: result.outcome,
     close_type: result.close_type,
+    
+    // Enhanced: grade
+    grade,
+    score_grade: grade,
+    
+    // Enhanced: score breakdown
+    score_breakdown: scoreBreakdown,
+    
+    // Enhanced: close analysis
+    close_outcome: closeOutcome,
+    close_confidence: 70,
+    
+    // Enhanced: techniques
+    techniques_detected: {
+      value_stacking: { score: catScore('offer_explanation'), components_used: [] as string[], evidence: [] as string[] },
+      urgency_creation: { score: catScore('urgency_close_attempt'), types_used: [] as string[], evidence: [] as string[] },
+    },
+    value_stacking_score: catScore('offer_explanation'),
+    urgency_score: catScore('urgency_close_attempt'),
+    objection_handling_score: catScore('objection_handling'),
+    
+    // Categories
     categories: result.categories,
+    
+    // Arrays
     strengths: result.strengths,
     weaknesses: result.weaknesses,
     objections_detected: result.objections_detected,
     objections_handled_well: result.objections_handled_well,
     objections_missed: result.objections_missed,
     next_coaching_actions: result.next_coaching_actions,
+    coaching_feedback: result.next_coaching_actions,
     coaching_markers: result.coaching_markers,
+    
+    // Enhanced: detailed data
+    key_quotes: keyQuotes.slice(0, 5),
+    missed_opportunities: [...(result.objections_missed || []), ...(result.weaknesses || [])],
+    
+    // Coach Summary
+    coach_summary: result.coach_summary || { did_well: [], needs_work: [], action_items: [] },
+    
+    status: 'completed',
     created_at: new Date().toISOString(),
   };
 
@@ -613,7 +794,7 @@ async function processOne(
   const result = validateAndParse(raw);
 
   // Write score — this creates the real UUID
-  const scoreId = await writeScore(config, request.call_id, request.id, result);
+  const scoreId = await writeScore(config, request.call_id, request.id, result, request.rep_name, request.call_title);
 
   // Learning extraction (non-fatal)
   try {

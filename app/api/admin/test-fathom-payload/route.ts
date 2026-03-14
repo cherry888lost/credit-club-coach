@@ -23,9 +23,9 @@ export async function POST(request: NextRequest) {
   // Check if user is admin
   const supabase = await createServiceClient();
   const { data: user } = await supabase
-    .from("users")
+    .from("reps")
     .select("role")
-    .eq("clerk_id", userId)
+    .eq("clerk_user_id", userId)
     .single();
     
   if (user?.role !== "admin") {
