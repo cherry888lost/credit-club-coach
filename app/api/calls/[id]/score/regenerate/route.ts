@@ -41,7 +41,7 @@ export async function POST(
     // Fetch call with all metadata needed for scoring
     const { data: call, error: callError } = await supabase
       .from("calls")
-      .select("id, transcript, title, org_id, rep_id, occurred_at, duration_seconds")
+      .select("id, transcript, title, org_id, rep_id, call_date, duration_seconds")
       .eq("id", callId)
       .single();
 
@@ -97,7 +97,7 @@ export async function POST(
         transcript: call.transcript,
         call_title: call.title ?? null,
         rep_name: repName,
-        call_date: call.occurred_at ?? null,
+        call_date: call.call_date ?? null,
         duration_seconds: call.duration_seconds ?? null,
       })
       .select("id")

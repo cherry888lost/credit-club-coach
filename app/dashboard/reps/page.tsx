@@ -105,7 +105,8 @@ export default async function RepsPage({
 
     repPerf[repId].callCount++;
 
-    const cs = (call as any).call_scores;
+    const rawCs = (call as any).call_scores;
+    const cs = Array.isArray(rawCs) ? rawCs[0] : rawCs;
     if (!cs) continue;
 
     const effectiveScore = cs.overall_score ?? cs.score_total;

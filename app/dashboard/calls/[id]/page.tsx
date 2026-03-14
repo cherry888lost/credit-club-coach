@@ -214,6 +214,12 @@ export default async function CallDetailPage({ params }: { params: { id: string 
       url: `https://fathom.video/share/${call.share_token}`,
       label: "Open Recording",
     },
+    // Imported calls store recording URL in source_url
+    !call.embed_url && !call.video_url && !call.recording_url && !call.share_url && call.source_url && {
+      type: "share",
+      url: call.source_url,
+      label: "Open Recording",
+    },
   ].filter(Boolean) as { type: string; url: string; label: string }[];
 
   const bestOption = playbackOptions[0];
@@ -322,14 +328,14 @@ export default async function CallDetailPage({ params }: { params: { id: string 
           <div className="text-center p-6 bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-800/50 dark:to-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-700 min-w-[140px]">
             <div
               className={`text-5xl font-bold ${
-                scores.overall_score >= 80
+                (scores.score_total ?? scores.overall_score) >= 80
                   ? "text-green-600"
-                  : scores.overall_score >= 60
+                  : (scores.score_total ?? scores.overall_score) >= 60
                   ? "text-amber-600"
                   : "text-red-600"
               }`}
             >
-              {scores.overall_score}
+              {(scores.score_total ?? scores.overall_score)}
             </div>
             <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">/ 100</p>
             {grade && (
@@ -434,7 +440,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
               <BarChart3 className="w-5 h-5 text-indigo-600" />
               <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Score Breakdown</h3>
               <span className="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
-                {scores.overall_score} / 100
+                {(scores.score_total ?? scores.overall_score)} / 100
               </span>
             </div>
 
@@ -1065,7 +1071,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                     {[
                       { label: "Transcript", val: call.transcript, len: call.transcript?.length },
                       { label: "Summary", val: call.summary, len: call.summary?.length },
-                      { label: "Scored", val: isScored, extra: isScored ? scores.overall_score : null },
+                      { label: "Scored", val: isScored, extra: isScored ? (scores.score_total ?? scores.overall_score) : null },
                       { label: "Enhanced", val: hasEnhancedAnalysis },
                     ].map(({ label, val, len, extra }: any) => (
                       <div key={label} className="flex justify-between items-center">

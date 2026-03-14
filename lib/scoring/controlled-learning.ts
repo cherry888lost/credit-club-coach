@@ -362,7 +362,7 @@ export async function approvePattern(
       status: 'approved',
       reviewed_by: reviewedBy,
       reviewed_at: new Date().toISOString(),
-      review_notes: notes || null,
+      notes: notes || null,
     })
     .eq('id', patternId)
     .eq('status', 'pending');
@@ -383,7 +383,7 @@ export async function rejectPattern(
       status: 'rejected',
       reviewed_by: reviewedBy,
       reviewed_at: new Date().toISOString(),
-      review_notes: notes || null,
+      notes: notes || null,
     })
     .eq('id', patternId)
     .eq('status', 'pending');

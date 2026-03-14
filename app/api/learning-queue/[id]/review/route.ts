@@ -29,21 +29,35 @@ export async function POST(
   switch (action) {
     case 'approve': {
       const result = await approvePattern(supabase, patternId, userId, notes);
+      if (!result.success) {
+        return NextResponse.json({ error: result.error || 'Approve failed' }, { status: 500 });
+      }
       return NextResponse.json(result);
     }
 
     case 'reject': {
       const result = await rejectPattern(supabase, patternId, userId, notes);
+      if (!result.success) {
+        return NextResponse.json({ error: result.error || 'Reject failed' }, { status: 500 });
+      }
       return NextResponse.json(result);
     }
 
     case 'promote_benchmark': {
-      if (!benchmark_data) {
-        return NextResponse.json({ error: 'benchmark_data required for promotion' }, { status: 400 });
-      }
       // First approve if not already
       await approvePattern(supabase, patternId, userId, notes);
-      const result = await promoteToBenchmark(supabase, patternId, orgId, benchmark_data);
+
+      // Auto-generate minimal benchmark_data from the pattern if not provided
+      const effectiveBenchmarkData = benchmark_data || {
+        outcome: 'closed',
+        quality_rating: 'strong',
+        why_this_is_good: 'Promoted from learning queue review',
+      };
+
+      const result = await promoteToBenchmark(supabase, patternId, orgId, effectiveBenchmarkData);
+      if (!result.success) {
+        return NextResponse.json({ error: result.error || 'Promote failed' }, { status: 500 });
+      }
       return NextResponse.json(result);
     }
 
