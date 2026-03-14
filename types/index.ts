@@ -1,4 +1,4 @@
-export type RepRole = 'admin' | 'closer' | 'sdr';
+export type RepRole = 'admin' | 'member';
 export type RepStatus = 'active' | 'inactive';
 export type SalesRole = 'closer' | 'sdr' | null;
 

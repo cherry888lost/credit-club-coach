@@ -17,7 +17,8 @@ import {
   Crown,
   AlertTriangle,
   Key,
-  RefreshCw
+  RefreshCw,
+  Shield
 } from "lucide-react";
 
 interface Member {
@@ -25,7 +26,7 @@ interface Member {
   name: string;
   email: string;
   fathom_email: string | null;
-  role: 'admin' | 'closer' | 'sdr';
+  role: 'admin' | 'member';
   sales_role: 'closer' | 'sdr' | null;
   status: 'active' | 'inactive';
   clerk_user_id: string | null;
@@ -39,7 +40,7 @@ interface Member {
 export default function TeamPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'closer' | 'sdr' | 'admin' | 'active' | 'inactive'>('all');
+  const [filter, setFilter] = useState<'all' | 'closer' | 'sdr' | 'admin' | 'member' | 'active' | 'inactive'>('all');
   const [search, setSearch] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
@@ -68,7 +69,7 @@ export default function TeamPage() {
 
   const filteredMembers = members.filter(m => {
     if (filter === 'closer' || filter === 'sdr') return m.sales_role === filter;
-    if (filter === 'admin') return m.role === 'admin';
+    if (filter === 'admin' || filter === 'member') return m.role === filter;
     if (filter === 'active' || filter === 'inactive') return m.status === filter;
     return true;
   }).filter(m => 
@@ -82,7 +83,7 @@ export default function TeamPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header - Improved contrast */}
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Team Management</h1>
@@ -97,7 +98,7 @@ export default function TeamPage() {
         </button>
       </div>
 
-      {/* Stats Cards - Better contrast */}
+      {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard icon={<Users className="w-5 h-5" />} label="Total" value={members.length} />
         <StatCard icon={<Crown className="w-5 h-5" />} label="Admins" value={admins.length} color="purple" />
@@ -106,7 +107,7 @@ export default function TeamPage() {
         <StatCard icon={<UserCheck className="w-5 h-5" />} label="Active" value={members.filter(m => m.status === 'active').length} color="green" />
       </div>
 
-      {/* Filters - Improved contrast */}
+      {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
@@ -128,6 +129,7 @@ export default function TeamPage() {
           >
             <option value="all">All Members</option>
             <option value="admin">Admins</option>
+            <option value="member">Members</option>
             <option value="closer">Closers</option>
             <option value="sdr">SDRs</option>
             <option value="active">Active</option>
@@ -136,7 +138,7 @@ export default function TeamPage() {
         </div>
       </div>
 
-      {/* Members List - Improved contrast */}
+      {/* Members List */}
       <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-300 dark:border-zinc-800">
         {loading ? (
           <div className="p-12 text-center">
@@ -225,14 +227,6 @@ export default function TeamPage() {
   }
 }
 
-function PhoneIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-    </svg>
-  );
-}
-
 function StatCard({ icon, label, value, color = "default" }: { icon: React.ReactNode; label: string; value: number; color?: "default" | "blue" | "purple" | "green" | "indigo" }) {
   const colors = {
     default: "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white",
@@ -278,15 +272,20 @@ function MemberRow({ member, onEdit, onDelete, onToggleStatus, onResetPassword }
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <span className="font-semibold text-zinc-900 dark:text-white">{member.name}</span>
             
-            {/* Admin badge */}
-            {member.role === 'admin' && (
+            {/* Account role badge */}
+            {member.role === 'admin' ? (
               <span className="px-2 py-0.5 text-xs font-semibold rounded-full border bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200 dark:border-purple-800">
                 <Crown className="w-3 h-3 inline mr-1" />
                 ADMIN
               </span>
+            ) : (
+              <span className="px-2 py-0.5 text-xs font-semibold rounded-full border bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700">
+                <Shield className="w-3 h-3 inline mr-1" />
+                MEMBER
+              </span>
             )}
             
-            {/* Sales role badge */}
+            {/* Sales role badge (independent) */}
             {member.sales_role && (
               <span className={`px-2 py-0.5 text-xs font-semibold rounded-full border ${salesRoleColors[member.sales_role]}`}>
                 {member.sales_role.toUpperCase()}
@@ -312,7 +311,7 @@ function MemberRow({ member, onEdit, onDelete, onToggleStatus, onResetPassword }
             </span>
             {member.fathom_email && member.fathom_email !== member.email && (
               <span className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-400">
-                <PhoneIcon className="w-4 h-4 text-zinc-500" />
+                <Phone className="w-4 h-4 text-zinc-500" />
                 {member.fathom_email}
               </span>
             )}
@@ -393,12 +392,14 @@ function AddMemberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
     name: string; 
     email: string; 
     fathom_email: string; 
-    role: 'admin' | 'closer' | 'sdr' 
+    role: 'admin' | 'member';
+    sales_role: 'closer' | 'sdr' | '';
   }>({ 
     name: "", 
     email: "", 
     fathom_email: "", 
-    role: "closer" 
+    role: "member",
+    sales_role: "closer",
   });
   const [loading, setLoading] = useState(false);
 
@@ -409,7 +410,10 @@ function AddMemberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
       const res = await fetch("/api/admin/members", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          sales_role: form.sales_role || null,
+        }),
       });
       if (res.ok) {
         onSuccess();
@@ -465,16 +469,29 @@ function AddMemberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
         </div>
         
         <div>
-          <label className="block text-sm font-semibold text-zinc-900 dark:text-white mb-2">Role</label>
+          <label className="block text-sm font-semibold text-zinc-900 dark:text-white mb-2">Account Role</label>
           <select
             value={form.role}
-            onChange={e => setForm({ ...form, role: e.target.value as 'admin' | 'closer' | 'sdr' })}
+            onChange={e => setForm({ ...form, role: e.target.value as 'admin' | 'member' })}
             className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg text-zinc-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
           >
             <option value="admin">Admin (Full access)</option>
-            <option value="closer">Closer (Sales closer)</option>
-            <option value="sdr">SDR (Appointment setter)</option>
+            <option value="member">Member (Own calls only)</option>
           </select>
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-zinc-900 dark:text-white mb-2">Sales Role</label>
+          <select
+            value={form.sales_role}
+            onChange={e => setForm({ ...form, sales_role: e.target.value as 'closer' | 'sdr' | '' })}
+            className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg text-zinc-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+          >
+            <option value="closer">Closer</option>
+            <option value="sdr">SDR</option>
+            <option value="">None</option>
+          </select>
+          <p className="text-xs text-zinc-600 dark:text-zinc-500 mt-1">Determines scoring rubric. Admins can also have a sales role.</p>
         </div>
         
         <div className="flex gap-3 pt-4">
@@ -499,7 +516,8 @@ function EditMemberModal({ member, onClose, onSuccess }: { member: Member; onClo
     name: member.name,
     email: member.email,
     fathom_email: member.fathom_email || "",
-    role: member.role,
+    role: member.role as 'admin' | 'member',
+    sales_role: (member.sales_role || '') as 'closer' | 'sdr' | '',
   });
   const [loading, setLoading] = useState(false);
 
@@ -510,7 +528,14 @@ function EditMemberModal({ member, onClose, onSuccess }: { member: Member; onClo
       const res = await fetch("/api/admin/members", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: member.id, ...form }),
+        body: JSON.stringify({
+          id: member.id,
+          name: form.name,
+          email: form.email,
+          fathom_email: form.fathom_email,
+          role: form.role,
+          sales_role: form.sales_role || null,
+        }),
       });
       if (res.ok) {
         onSuccess();
@@ -560,16 +585,29 @@ function EditMemberModal({ member, onClose, onSuccess }: { member: Member; onClo
         </div>
         
         <div>
-          <label className="block text-sm font-semibold text-zinc-900 dark:text-white mb-2">Role</label>
+          <label className="block text-sm font-semibold text-zinc-900 dark:text-white mb-2">Account Role</label>
           <select
             value={form.role}
-            onChange={e => setForm({ ...form, role: e.target.value as 'admin' | 'closer' | 'sdr' })}
+            onChange={e => setForm({ ...form, role: e.target.value as 'admin' | 'member' })}
             className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg text-zinc-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
           >
             <option value="admin">Admin (Full access)</option>
-            <option value="closer">Closer (Sales closer)</option>
-            <option value="sdr">SDR (Appointment setter)</option>
+            <option value="member">Member (Own calls only)</option>
           </select>
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-zinc-900 dark:text-white mb-2">Sales Role</label>
+          <select
+            value={form.sales_role}
+            onChange={e => setForm({ ...form, sales_role: e.target.value as 'closer' | 'sdr' | '' })}
+            className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg text-zinc-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+          >
+            <option value="closer">Closer</option>
+            <option value="sdr">SDR</option>
+            <option value="">None</option>
+          </select>
+          <p className="text-xs text-zinc-600 dark:text-zinc-500 mt-1">Determines scoring rubric. Independent of account role.</p>
         </div>
         
         <div className="flex gap-3 pt-4">
@@ -648,7 +686,7 @@ function DeleteConfirmModal({ member, onClose, onSuccess }: { member: Member; on
         {hardDelete && (
           <div>
             <label className="block text-sm font-semibold text-zinc-900 dark:text-white mb-2">
-              Type "{member.name}" to confirm:
+              Type &quot;{member.name}&quot; to confirm:
             </label>
             <input
               type="text"
@@ -723,7 +761,7 @@ function ResetPasswordModal({ member, onClose }: { member: Member; onClose: () =
               <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
                 <p className="text-sm text-amber-800 dark:text-amber-400">
                   <AlertTriangle className="w-4 h-4 inline mr-1" />
-                  This user hasn't logged in yet. They should use the "Forgot password" link on the login page instead.
+                  This user hasn&apos;t logged in yet. They should use the &quot;Forgot password&quot; link on the login page instead.
                 </p>
               </div>
             )}

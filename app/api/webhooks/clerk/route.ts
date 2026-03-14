@@ -23,7 +23,7 @@ export async function POST(req: Request) {
    clerk_user_id: id,
    email: email,
    name: `${first_name ?? ""} ${last_name ?? ""}`,
-   role: "closer",
+   role: "member",
  });
 
  return NextResponse.json({ success: true });

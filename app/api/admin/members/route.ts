@@ -126,13 +126,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    if (!['admin', 'closer', 'sdr'].includes(role)) {
-      return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+    if (!['admin', 'member'].includes(role)) {
+      return NextResponse.json({ error: "Invalid role. Must be 'admin' or 'member'." }, { status: 400 });
     }
     
     // Validate sales_role if provided
     if (sales_role && !['closer', 'sdr'].includes(sales_role)) {
-      return NextResponse.json({ error: "Invalid sales_role" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid sales_role. Must be 'closer', 'sdr', or null." }, { status: 400 });
     }
 
     // Check if email already exists
@@ -170,7 +170,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create rep in Supabase
+    // Create rep in Supabase — role and sales_role are independent
     const { data: newRep, error: repError } = await serviceSupabase
       .from("reps")
       .insert({
@@ -254,13 +254,13 @@ export async function PATCH(request: NextRequest) {
       }
     }
 
-    // Build update object
+    // Build update object — role and sales_role are independent
     const updates: any = { updated_at: new Date().toISOString() };
     if (name) updates.name = name;
     if (email) updates.email = email.toLowerCase();
     if (fathom_email !== undefined) updates.fathom_email = fathom_email?.toLowerCase() || null;
-    if (role) updates.role = role;
-    if (sales_role !== undefined) updates.sales_role = sales_role;
+    if (role && ['admin', 'member'].includes(role)) updates.role = role;
+    if (sales_role !== undefined) updates.sales_role = sales_role || null;
     if (status) updates.status = status;
 
     // Update in Supabase

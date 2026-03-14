@@ -218,6 +218,7 @@ export default async function DashboardPage() {
   for (const s of weekScores) {
     if (!s.objections_detected) continue;
     for (const obj of s.objections_detected) {
+      if (typeof obj !== 'string') continue;
       const normalized = obj.trim().toLowerCase();
       if (normalized) {
         objectionCounts[normalized] = (objectionCounts[normalized] || 0) + 1;

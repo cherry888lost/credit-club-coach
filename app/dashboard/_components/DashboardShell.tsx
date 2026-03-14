@@ -133,7 +133,7 @@ export default function DashboardShell({ children, orgName, userRole, isAdmin: i
                   Account
                 </p>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 capitalize">
-                  {userRole}
+                  {isAdminUser ? "Admin" : userRole}
                 </p>
               </div>
             </div>

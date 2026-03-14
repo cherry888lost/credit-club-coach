@@ -23,7 +23,7 @@ async function getOrCreateRep(
   try {
     const supabase = await createServiceClient();
     
-    // Check existing
+    // Check existing by clerk_user_id
     const { data: existing } = await supabase
       .from("reps")
       .select("*")
@@ -32,12 +32,35 @@ async function getOrCreateRep(
     
     if (existing) return { rep: existing as Rep, error: null };
     
+    // Fallback: match by email for pre-created reps (e.g. added via admin before first login)
+    if (email) {
+      const { data: emailMatch } = await supabase
+        .from("reps")
+        .select("*")
+        .eq("email", email.toLowerCase())
+        .is("clerk_user_id", null)
+        .single();
+      
+      if (emailMatch) {
+        // Link the pre-created rep to this Clerk user
+        const { data: linked, error: linkErr } = await supabase
+          .from("reps")
+          .update({ clerk_user_id: userId, name: name || emailMatch.name })
+          .eq("id", emailMatch.id)
+          .select()
+          .single();
+        
+        if (linked) return { rep: linked as Rep, error: null };
+        if (linkErr) console.error("[auth] Email match link failed:", linkErr.message);
+      }
+    }
+    
     // First user = admin, others = closer
     const { count } = await supabase
       .from("reps")
       .select("*", { count: "exact", head: true });
     
-    const role: RepRole = count === 0 ? "admin" : "closer";
+    const role: RepRole = count === 0 ? "admin" : "member";
     
     const { data: newRep, error } = await supabase
       .from("reps")
@@ -132,20 +155,13 @@ export function hasRole(user: CurrentUser | null, roles: RepRole[]): boolean {
 }
 
 /**
- * Check if user has full (admin/manager) access.
- * Grants access if:
- *  - rep.role === 'admin'
- *  - rep.sales_role === 'manager' (cast from DB — may not match TS union)
- *  - rep.name matches "Alexa" (business rule)
+ * Check if user has full admin access.
+ * role field: 'admin' | 'member'
+ * sales_role field: 'closer' | 'sdr' | null (independent of admin status)
  */
 export function isAdmin(user: CurrentUser | null): boolean {
   if (!user?.rep) return false;
-  const rep = user.rep;
-  if (rep.role === "admin") return true;
-  if ((rep.sales_role as string) === "manager") return true;
-  // Alexa is treated as admin per business rules
-  if (rep.name?.toLowerCase().startsWith("alexa")) return true;
-  return false;
+  return user.rep.role === "admin";
 }
 
 /**

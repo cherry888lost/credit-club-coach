@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
           clerk_user_id: `demo_${repName.toLowerCase().replace(/\s+/g, '_')}`,
           email: repEmail,
           name: repName,
-          role: repName.includes("Manager") ? "manager" : "closer",
+          role: repName.includes("Manager") ? "admin" : "member",
           status: "active",
         })
         .select()
