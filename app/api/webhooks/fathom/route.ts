@@ -330,9 +330,15 @@ async function processFathomDirectWebhook(
   const payloadJson = JSON.stringify(payload);
   console.log(`[WEBHOOK ${requestId}] RAW PAYLOAD (first 2000 chars):`, payloadJson.substring(0, 2000));
   
-  // Discover recording object if present
+  // Discover recording/data objects if present
   if (payload.recording) {
     console.log(`[WEBHOOK ${requestId}] Recording object keys:`, Object.keys(payload.recording).join(", "));
+  }
+  if (payload.data) {
+    console.log(`[WEBHOOK ${requestId}] Data object keys:`, Object.keys(payload.data).join(", "));
+    if (payload.data.recording) {
+      console.log(`[WEBHOOK ${requestId}] Data.recording object keys:`, Object.keys(payload.data.recording).join(", "));
+    }
   }
   
   // ============================================
@@ -347,31 +353,47 @@ async function processFathomDirectWebhook(
     uuid: payload.uuid,
     external_id: payload.external_id,
     
+    // Nested in data object (Fathom Svix envelope)
+    data_id: payload.data?.id,
+    data_recording_id: payload.data?.recording_id,
+    data_recordingId: payload.data?.recordingId,
+    data_uuid: payload.data?.uuid,
+    
     // Nested in recording object
     recording_obj_id: payload.recording?.id,
     recording_obj_uuid: payload.recording?.uuid,
     recording_obj_external_id: payload.recording?.external_id,
     recording_obj_recording_id: payload.recording?.recording_id,
     
-    // From share URL extraction
-    share_url_token: payload.share_url ? (payload.share_url.match(/\/share\/([a-zA-Z0-9_-]+)/)?.[1] || null) : null,
+    // Nested in data.recording object
+    data_recording_obj_id: payload.data?.recording?.id,
+    data_recording_obj_recording_id: payload.data?.recording?.recording_id,
+    
+    // From share URL extraction (check all possible share_url locations)
+    share_url_token: (payload.share_url || payload.data?.share_url || payload.recording?.share_url || payload.data?.recording?.share_url)
+      ? ((payload.share_url || payload.data?.share_url || payload.recording?.share_url || payload.data?.recording?.share_url).match(/\/share\/([a-zA-Z0-9_-]+)/)?.[1] || null) 
+      : null,
   };
   
   console.log(`[WEBHOOK ${requestId}] RECORDING ID CANDIDATES:`, candidateIds);
   
-  // Extract identifiers from payload - try multiple sources
+  // Extract identifiers from payload - try multiple sources INCLUDING data.* envelope
   const recordingId = payload.recording_id?.toString() || 
+                      payload.data?.recording_id?.toString() ||
+                      payload.data?.id?.toString() ||
                       payload.id?.toString() || 
                       payload.recording?.id?.toString() || 
                       payload.recording?.recording_id?.toString() || 
+                      payload.data?.recording?.id?.toString() ||
+                      payload.data?.recording?.recording_id?.toString() ||
                       null;
                       
-  const shareUrl = payload.share_url || payload.recording?.share_url || null;
-  const url = payload.url || payload.recording?.url || null;
-  const embedUrl = payload.embed_url || payload.recording?.embed_url || null;
-  const videoUrl = payload.video_url || payload.recording?.video_url || null;
-  const recordingUrl = payload.recording_url || payload.recording?.recording_url || null;
-  const thumbnailUrl = payload.thumbnail_url || payload.recording?.thumbnail_url || null;
+  const shareUrl = payload.share_url || payload.data?.share_url || payload.recording?.share_url || payload.data?.recording?.share_url || null;
+  const url = payload.url || payload.data?.url || payload.recording?.url || payload.data?.recording?.url || null;
+  const embedUrl = payload.embed_url || payload.data?.embed_url || payload.recording?.embed_url || payload.data?.recording?.embed_url || null;
+  const videoUrl = payload.video_url || payload.data?.video_url || payload.recording?.video_url || payload.data?.recording?.video_url || null;
+  const recordingUrl = payload.recording_url || payload.data?.recording_url || payload.recording?.recording_url || payload.data?.recording?.recording_url || null;
+  const thumbnailUrl = payload.thumbnail_url || payload.data?.thumbnail_url || payload.recording?.thumbnail_url || payload.data?.recording?.thumbnail_url || null;
   
   // Extract call ID from URL (format: https://fathom.video/calls/{id})
   let fathomCallIdFromUrl: string | null = null;
@@ -382,8 +404,33 @@ async function processFathomDirectWebhook(
     }
   }
   
-  // Extract event type
-  const eventType = payload.type || payload.event || payload.event_type || payload.recording?.event_type || "unknown";
+  // ============================================
+  // URL NORMALIZATION - Strip query params, trailing slash, lowercase for matching
+  // ============================================
+  const normalizeUrl = (u: string | null): string | null => {
+    if (!u) return null;
+    try {
+      const parsed = new URL(u);
+      // Strip query params and hash, lowercase, remove trailing slash
+      return (parsed.origin + parsed.pathname).toLowerCase().replace(/\/+$/, "");
+    } catch {
+      // If URL parsing fails, do basic normalization
+      return u.split("?")[0].split("#")[0].toLowerCase().replace(/\/+$/, "");
+    }
+  };
+  
+  // Extract share_token from any share URL
+  const extractShareToken = (u: string | null): string | null => {
+    if (!u) return null;
+    const match = u.match(/\/share\/([a-zA-Z0-9_-]+)/);
+    return match ? match[1] : null;
+  };
+  
+  const normalizedShareUrl = normalizeUrl(shareUrl);
+  const shareToken = extractShareToken(shareUrl);
+  
+  // Extract event type (check data.* envelope too)
+  const eventType = payload.type || payload.event || payload.event_type || payload.data?.type || payload.data?.event_type || payload.recording?.event_type || payload.data?.recording?.event_type || "unknown";
   
   // Store diagnostics
   trace.early_diagnostics.webhook_recording_id_raw = payload.recording_id;
@@ -502,31 +549,39 @@ async function processFathomDirectWebhook(
   }
   
   // ============================================
-  // ACTION ITEMS
+  // ACTION ITEMS (check data.* envelope too)
   // ============================================
   const actionItems = Array.isArray(payload.action_items) ? payload.action_items : 
+                      Array.isArray(payload.data?.action_items) ? payload.data.action_items :
                       Array.isArray(payload.recording?.action_items) ? payload.recording.action_items : 
+                      Array.isArray(payload.data?.recording?.action_items) ? payload.data.recording.action_items :
                       null;
   
   // ============================================
-  // HIGHLIGHTS
+  // HIGHLIGHTS (check data.* envelope too)
   // ============================================
   const highlights = Array.isArray(payload.highlights) ? payload.highlights : 
+                     Array.isArray(payload.data?.highlights) ? payload.data.highlights :
                      Array.isArray(payload.recording?.highlights) ? payload.recording.highlights : 
+                     Array.isArray(payload.data?.recording?.highlights) ? payload.data.recording.highlights :
                      null;
   
   // ============================================
-  // SPEAKERS
+  // SPEAKERS (check data.* envelope too)
   // ============================================
   const speakers = Array.isArray(payload.speakers) ? payload.speakers : 
+                   Array.isArray(payload.data?.speakers) ? payload.data.speakers :
                    Array.isArray(payload.recording?.speakers) ? payload.recording.speakers : 
+                   Array.isArray(payload.data?.recording?.speakers) ? payload.data.recording.speakers :
                    null;
   
   // ============================================
-  // PARTICIPANTS
+  // PARTICIPANTS (check data.* envelope too)
   // ============================================
   const participants = Array.isArray(payload.participants) ? payload.participants : 
+                       Array.isArray(payload.data?.participants) ? payload.data.participants :
                        Array.isArray(payload.recording?.participants) ? payload.recording.participants : 
+                       Array.isArray(payload.data?.recording?.participants) ? payload.data.recording.participants :
                        null;
   
   // ============================================
@@ -610,7 +665,7 @@ async function processFathomDirectWebhook(
       try {
         const result = await supabase
           .from("calls")
-          .select("id, share_url, fathom_call_id, transcript, summary")
+          .select("id, share_url, share_token, fathom_call_id, transcript, summary")
           .eq("share_url", shareUrl)
           .limit(1);
         console.log(`[WEBHOOK ${requestId}] MATCH STEP 1 QUERY FINISHED`);
@@ -634,6 +689,92 @@ async function processFathomDirectWebhook(
       console.log(`[WEBHOOK ${requestId}] MATCH STEP 1: skipped (no share_url)`);
     }
     
+    // 1b️⃣ MATCH STEP 1b: Normalized share_url match (strip query params, trailing slash, lowercase)
+    if (!existingCall && normalizedShareUrl) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 1b START: normalized share_url match`);
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 1b QUERY VALUE (ilike): ${normalizedShareUrl}%`);
+      try {
+        // Fetch recent calls with share_url and compare normalized
+        const result = await supabase
+          .from("calls")
+          .select("id, share_url, share_token, fathom_call_id, transcript, summary")
+          .not("share_url", "is", null)
+          .limit(100);
+        if (result.error) {
+          stepError = result.error.message;
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1b ERROR: ${result.error.message}`);
+        } else if (result.data) {
+          const match = result.data.find((row: any) => normalizeUrl(row.share_url) === normalizedShareUrl);
+          if (match) {
+            existingCall = match;
+            matchedBy = "share_url_normalized";
+            console.log(`[WEBHOOK ${requestId}] MATCH STEP 1b FOUND CALL ID: ${existingCall.id}`);
+            console.log(`[WEBHOOK ${requestId}] DB share_url: "${match.share_url}" vs webhook: "${shareUrl}"`);
+          } else {
+            console.log(`[WEBHOOK ${requestId}] MATCH STEP 1b NOT FOUND (checked ${result.data.length} rows)`);
+          }
+        }
+      } catch (err: any) {
+        stepError = err.message;
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1b ERROR: ${err.message}`);
+      }
+    }
+    
+    // 1c️⃣ MATCH STEP 1c: share_token match (extract token from URL path, match against share_token column)
+    if (!existingCall && shareToken) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c START: share_token match`);
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c QUERY VALUE: ${shareToken}`);
+      try {
+        const result = await supabase
+          .from("calls")
+          .select("id, share_url, share_token, fathom_call_id, transcript, summary")
+          .eq("share_token", shareToken)
+          .limit(1);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c QUERY FINISHED`);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c ROW COUNT: ${result.data?.length ?? 0}`);
+        if (result.error) {
+          stepError = result.error.message;
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c ERROR: ${result.error.message}`);
+        } else if (result.data && result.data.length > 0) {
+          existingCall = result.data[0];
+          matchedBy = "share_token";
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c FOUND CALL ID: ${existingCall.id}`);
+        } else {
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c NOT FOUND`);
+        }
+      } catch (err: any) {
+        stepError = err.message;
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c ERROR: ${err.message}`);
+      }
+    } else if (!shareToken) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 1c: skipped (no share_token)`);
+    }
+    
+    // 1d️⃣ MATCH STEP 1d: share_token extracted from DB share_url (if share_token column is empty but share_url has token)
+    if (!existingCall && shareToken) {
+      console.log(`[WEBHOOK ${requestId}] MATCH STEP 1d START: share_token via LIKE on share_url column`);
+      try {
+        const result = await supabase
+          .from("calls")
+          .select("id, share_url, share_token, fathom_call_id, transcript, summary")
+          .like("share_url", `%/share/${shareToken}%`)
+          .limit(1);
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1d ROW COUNT: ${result.data?.length ?? 0}`);
+        if (result.error) {
+          stepError = result.error.message;
+        } else if (result.data && result.data.length > 0) {
+          existingCall = result.data[0];
+          matchedBy = "share_token_in_url";
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1d FOUND CALL ID: ${existingCall.id}`);
+        } else {
+          console.log(`[WEBHOOK ${requestId}] MATCH STEP 1d NOT FOUND`);
+        }
+      } catch (err: any) {
+        stepError = err.message;
+        console.log(`[WEBHOOK ${requestId}] MATCH STEP 1d ERROR: ${err.message}`);
+      }
+    }
+    
     // 2️⃣ MATCH STEP 2: fathom_call_id exact match (recording_id from payload)
     if (!existingCall && recordingId) {
       console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 START: fathom_call_id exact match`);
@@ -641,7 +782,7 @@ async function processFathomDirectWebhook(
       try {
         const result = await supabase
           .from("calls")
-          .select("id, share_url, fathom_call_id, transcript, summary")
+          .select("id, share_url, share_token, fathom_call_id, transcript, summary")
           .eq("fathom_call_id", recordingId)
           .limit(1);
         console.log(`[WEBHOOK ${requestId}] MATCH STEP 2 QUERY FINISHED`);
@@ -672,7 +813,7 @@ async function processFathomDirectWebhook(
       try {
         const result = await supabase
           .from("calls")
-          .select("id, share_url, fathom_call_id, transcript, summary")
+          .select("id, share_url, share_token, fathom_call_id, transcript, summary")
           .eq("fathom_call_id", fathomCallIdFromUrl)
           .limit(1);
         console.log(`[WEBHOOK ${requestId}] MATCH STEP 3 QUERY FINISHED`);
@@ -769,15 +910,18 @@ async function processFathomDirectWebhook(
       updateData.fathom_call_id = recordingId;
     }
     
-    // Update highlights/speakers/participants if present and not already set
-    if ((payload.highlights || payload.recording?.highlights) && !existingCall?.highlights) {
-      updateData.highlights = payload.highlights || payload.recording?.highlights;
+    // Update highlights/speakers/participants if present and not already set (check data.* too)
+    const payloadHighlights = payload.highlights || payload.data?.highlights || payload.recording?.highlights || payload.data?.recording?.highlights;
+    const payloadSpeakers = payload.speakers || payload.data?.speakers || payload.recording?.speakers || payload.data?.recording?.speakers;
+    const payloadParticipants = payload.participants || payload.data?.participants || payload.recording?.participants || payload.data?.recording?.participants;
+    if (payloadHighlights && !existingCall?.highlights) {
+      updateData.highlights = payloadHighlights;
     }
-    if ((payload.speakers || payload.recording?.speakers) && !existingCall?.speakers) {
-      updateData.speakers = payload.speakers || payload.recording?.speakers;
+    if (payloadSpeakers && !existingCall?.speakers) {
+      updateData.speakers = payloadSpeakers;
     }
-    if ((payload.participants || payload.recording?.participants) && !existingCall?.participants) {
-      updateData.participants = payload.participants || payload.recording?.participants;
+    if (payloadParticipants && !existingCall?.participants) {
+      updateData.participants = payloadParticipants;
     }
 
     // ============================================
@@ -787,9 +931,15 @@ async function processFathomDirectWebhook(
       payload.user?.email ||
       payload.host?.email ||
       payload.host_email ||
+      payload.data?.host_email ||
+      payload.data?.user?.email ||
+      payload.data?.host?.email ||
       payload.recording?.host_email ||
+      payload.data?.recording?.host_email ||
       (Array.isArray(payload.participants) && payload.participants[0]?.email) ||
+      (Array.isArray(payload.data?.participants) && payload.data.participants[0]?.email) ||
       (Array.isArray(payload.recording?.participants) && payload.recording.participants[0]?.email) ||
+      (Array.isArray(payload.data?.recording?.participants) && payload.data.recording.participants[0]?.email) ||
       null;
 
     console.log(`[WEBHOOK ${requestId}] REP MATCHING: email candidate = ${repEmail || "none"}`);
@@ -825,9 +975,9 @@ async function processFathomDirectWebhook(
     } else {
       // CREATE new call
       console.log(`[WEBHOOK ${requestId}] No match found - creating new call`);
-      const meetingTitle = payload.meeting_title || payload.title || payload.recording?.title || "Untitled";
-      const callDate = payload.created_at || payload.occurred_at || payload.started_at || payload.recording?.created_at || new Date().toISOString();
-      const durationRaw = payload.duration_seconds || payload.duration || payload.recording?.duration_seconds || null;
+      const meetingTitle = payload.meeting_title || payload.title || payload.data?.title || payload.data?.meeting_title || payload.recording?.title || payload.data?.recording?.title || "Untitled";
+      const callDate = payload.created_at || payload.occurred_at || payload.started_at || payload.data?.created_at || payload.data?.occurred_at || payload.data?.started_at || payload.recording?.created_at || payload.data?.recording?.created_at || new Date().toISOString();
+      const durationRaw = payload.duration_seconds || payload.duration || payload.data?.duration_seconds || payload.data?.duration || payload.recording?.duration_seconds || payload.data?.recording?.duration_seconds || null;
       const durationSeconds = durationRaw ? Math.round(Number(durationRaw)) : null;
 
       const insertData: any = {
@@ -837,7 +987,7 @@ async function processFathomDirectWebhook(
         occurred_at: callDate,
         call_date: callDate,
         duration_seconds: durationSeconds,
-        host_email: (repEmail || payload.host_email || payload.recording?.host_email || "").toLowerCase() || null,
+        host_email: (repEmail || payload.host_email || payload.data?.host_email || payload.recording?.host_email || payload.data?.recording?.host_email || "").toLowerCase() || null,
         share_url: shareUrl,
         embed_url: embedUrl,
         video_url: videoUrl,
@@ -850,15 +1000,15 @@ async function processFathomDirectWebhook(
         summary_status: summaryText ? "ready" : "pending",
       };
       
-      // Only add JSONB fields if they exist
-      if (payload.highlights || payload.recording?.highlights) {
-        insertData.highlights = payload.highlights || payload.recording?.highlights;
+      // Only add JSONB fields if they exist (check data.* envelope too)
+      if (payloadHighlights) {
+        insertData.highlights = payloadHighlights;
       }
-      if (payload.speakers || payload.recording?.speakers) {
-        insertData.speakers = payload.speakers || payload.recording?.speakers;
+      if (payloadSpeakers) {
+        insertData.speakers = payloadSpeakers;
       }
-      if (payload.participants || payload.recording?.participants) {
-        insertData.participants = payload.participants || payload.recording?.participants;
+      if (payloadParticipants) {
+        insertData.participants = payloadParticipants;
       }
       
       const { data, error } = await supabase
