@@ -318,12 +318,24 @@ export async function POST(request: NextRequest) {
     
     console.log(`[WEBHOOK ${requestId}] No existing call found, inserting new record`);
     
+    // Get rep name if rep_id is set
+    let repName: string | null = null;
+    if (repId) {
+      const { data: repData } = await supabase
+        .from("reps")
+        .select("name")
+        .eq("id", repId)
+        .single();
+      repName = repData?.name ?? null;
+    }
+
     // Insert call into database
     const { data: newCall, error: callError } = await supabase
       .from("calls")
       .insert({
         org_id: orgId,
         rep_id: repId,
+        rep_name: repName,
         fathom_call_id: fathomCallId,
         title: title,
         occurred_at: occurredAt,
@@ -370,7 +382,7 @@ export async function POST(request: NextRequest) {
           call_id: newCall.id,
           status: "pending",
           transcript: transcript,
-          rep_name: repId ? (await supabase.from("reps").select("name").eq("id", repId).single())?.data?.name ?? null : null,
+          rep_name: repName,
           call_title: title ?? null,
           call_date: occurredAt ?? null,
         })

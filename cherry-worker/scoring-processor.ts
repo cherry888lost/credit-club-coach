@@ -2,7 +2,7 @@
 // Main worker logic: poll → claim → score → write → complete/fail
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { buildScoringPrompt, SCORING_RUBRIC, ScoringResult, CoachSummary, CloseType, Outcome, QualityLabel } from './reasoner-prompt';
+import { buildScoringPrompt, SCORING_RUBRIC, ScoringResult, CoachSummary, CloseType, Outcome, QualityLabel, sanitizeScoringResult } from './reasoner-prompt';
 
 const MODEL_VERSION = 'cherry-reasoner-v1';
 const MIN_TRANSCRIPT_LENGTH = 500;
@@ -249,7 +249,9 @@ export function parseReasonerOutput(raw: string): ScoringResult {
     }
   }
 
-  return parsed as ScoringResult;
+  // Sanitize output to remove any leaked benchmark names
+  const sanitized = sanitizeScoringResult(parsed as ScoringResult);
+  return sanitized;
 }
 
 // ---------------------------------------------------------------------------

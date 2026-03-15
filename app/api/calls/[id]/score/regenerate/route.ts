@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { auth } from "@clerk/nextjs/server";
-import { MIN_TRANSCRIPT_LENGTH } from "@/lib/scoring/prompts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const MIN_TRANSCRIPT_LENGTH = 500;
 
 /**
  * POST /api/calls/[id]/score/regenerate
@@ -27,16 +28,25 @@ export async function POST(
   try {
     const supabase = await createServiceClient();
 
-    // Check if user is admin via reps table (matches lib/auth.ts pattern)
+    // Check if user is admin via reps table
+    // Support both "admin" role and is_admin flag
     const { data: rep } = await supabase
       .from("reps")
-      .select("role")
+      .select("role, is_admin")
       .eq("clerk_user_id", userId)
       .single();
 
-    if (rep?.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden - Admin only" }, { status: 403 });
+    const isAdmin = rep?.role === "admin" || rep?.is_admin === true;
+
+    if (!isAdmin) {
+      console.log(`[RESCORE] Access denied for user ${userId}, role: ${rep?.role}, is_admin: ${rep?.is_admin}`);
+      return NextResponse.json({ 
+        error: "Forbidden - Admin only",
+        debug: { role: rep?.role, is_admin: rep?.is_admin }
+      }, { status: 403 });
     }
+
+    console.log(`[RESCORE] Admin access granted for user ${userId}`);
 
     // Fetch call with all metadata needed for scoring
     const { data: call, error: callError } = await supabase
