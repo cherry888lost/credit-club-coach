@@ -145,11 +145,13 @@ async function processZapierWebhook(requestId: string, payload: any, trace: any)
       .eq("fathom_call_id", recordingId)
       .maybeSingle();
 
+    const callDate = createdAt || new Date().toISOString();
     const callData: any = {
       org_id: DEFAULT_ORG_ID,
       fathom_call_id: recordingId,
       title: meetingTitle || "Untitled",
-      occurred_at: createdAt || new Date().toISOString(),
+      occurred_at: callDate,
+      call_date: callDate,
       duration_seconds: duration ? Math.round(parseFloat(duration) * 60) : null,
       host_email: hostEmail?.toLowerCase(),
       source: "zapier",
@@ -206,10 +208,13 @@ async function processZapierWebhook(requestId: string, payload: any, trace: any)
       console.log(`[WEBHOOK ${requestId}] Created new call: ${call.id}`);
     }
 
-    // Match rep
+    // Match rep by host email
+    console.log(`[WEBHOOK ${requestId}] ZAPIER REP MATCHING: email = ${hostEmail || "none"}`);
     const { repId, repName } = await findRep(hostEmail);
+    console.log(`[WEBHOOK ${requestId}] ZAPIER REP RESULT: repId=${repId || "none"}, repName=${repName || "none"}`);
     if (repId && !existingCall?.rep_id) {
-      await supabase.from("calls").update({ rep_id: repId }).eq("id", call.id);
+      await supabase.from("calls").update({ rep_id: repId, rep_name: repName }).eq("id", call.id);
+      console.log(`[WEBHOOK ${requestId}] ZAPIER: Linked rep ${repName} (${repId}) to call ${call.id}`);
     }
 
     trace.result = { action: existingCall ? "updated" : "created", call_id: call.id };
@@ -775,6 +780,34 @@ async function processFathomDirectWebhook(
       updateData.participants = payload.participants || payload.recording?.participants;
     }
 
+    // ============================================
+    // REP MATCHING - Extract email from payload and match to reps table
+    // ============================================
+    const repEmail =
+      payload.user?.email ||
+      payload.host?.email ||
+      payload.host_email ||
+      payload.recording?.host_email ||
+      (Array.isArray(payload.participants) && payload.participants[0]?.email) ||
+      (Array.isArray(payload.recording?.participants) && payload.recording.participants[0]?.email) ||
+      null;
+
+    console.log(`[WEBHOOK ${requestId}] REP MATCHING: email candidate = ${repEmail || "none"}`);
+
+    const { repId, repName } = await findRep(repEmail ?? undefined);
+
+    console.log(`[WEBHOOK ${requestId}] REP MATCHING RESULT:`, {
+      repEmail,
+      repId: repId || "no match",
+      repName: repName || "no match",
+    });
+
+    // Attach rep fields to updateData so they persist on both update & insert paths
+    if (repId) {
+      updateData.rep_id = repId;
+      updateData.rep_name = repName;
+    }
+
     let call;
     
     if (existingCall) {
@@ -790,26 +823,34 @@ async function processFathomDirectWebhook(
       call = data;
       console.log(`[WEBHOOK ${requestId}] UPDATED EXISTING CALL: ${call.id}`);
     } else {
-      // CREATE minimal fallback call (only if no match found)
+      // CREATE new call
       console.log(`[WEBHOOK ${requestId}] No match found - creating new call`);
+      const meetingTitle = payload.meeting_title || payload.title || payload.recording?.title || "Untitled";
+      const callDate = payload.created_at || payload.occurred_at || payload.started_at || payload.recording?.created_at || new Date().toISOString();
+      const durationRaw = payload.duration_seconds || payload.duration || payload.recording?.duration_seconds || null;
+      const durationSeconds = durationRaw ? Math.round(Number(durationRaw)) : null;
+
       const insertData: any = {
         org_id: DEFAULT_ORG_ID,
         fathom_call_id: recordingId || fathomCallIdFromUrl,
-        title: payload.meeting_title || payload.title || payload.recording?.title || "Untitled",
-        occurred_at: payload.created_at || payload.recording?.created_at || new Date().toISOString(),
-        duration_seconds: payload.duration_seconds || payload.duration || payload.recording?.duration_seconds || null,
-        host_email: payload.host_email || payload.recording?.host_email || null,
+        title: meetingTitle,
+        occurred_at: callDate,
+        call_date: callDate,
+        duration_seconds: durationSeconds,
+        host_email: (repEmail || payload.host_email || payload.recording?.host_email || "").toLowerCase() || null,
         share_url: shareUrl,
         embed_url: embedUrl,
         video_url: videoUrl,
         recording_url: recordingUrl,
         thumbnail_url: thumbnailUrl,
+        rep_id: repId,
+        rep_name: repName,
         ...updateData,
         transcript_status: transcriptText ? "ready" : "pending",
         summary_status: summaryText ? "ready" : "pending",
       };
       
-      // Only add fields if they exist
+      // Only add JSONB fields if they exist
       if (payload.highlights || payload.recording?.highlights) {
         insertData.highlights = payload.highlights || payload.recording?.highlights;
       }
@@ -831,10 +872,31 @@ async function processFathomDirectWebhook(
       console.log(`[WEBHOOK ${requestId}] CREATED NEW CALL: ${call.id}`);
     }
 
-    // Trigger scoring if transcript is ready and long enough
+    // Auto-enqueue scoring if transcript is long enough
     if (call.transcript && call.transcript.length > 500 && call.score_status !== "completed") {
       console.log(`[WEBHOOK ${requestId}] Triggering scoring for call: ${call.id}`);
-      await scoreCall(call.id, call.rep_id, call.transcript, call.summary);
+      try {
+        const { data: scoringReq, error: scoreError } = await supabase
+          .from("scoring_requests")
+          .insert({
+            call_id: call.id,
+            status: "pending",
+            transcript: call.transcript,
+            rep_name: call.rep_name,
+            call_title: call.title ?? null,
+            call_date: call.occurred_at ?? null,
+          })
+          .select("id")
+          .single();
+
+        if (scoreError) {
+          console.error(`[WEBHOOK ${requestId}] Failed to enqueue scoring:`, scoreError.message);
+        } else {
+          console.log(`[WEBHOOK ${requestId}] Auto-enqueued scoring request ${scoringReq.id} for call ${call.id}`);
+        }
+      } catch (scoreErr: any) {
+        console.error(`[WEBHOOK ${requestId}] Scoring enqueue error:`, scoreErr.message);
+      }
     }
 
     trace.result = { 
