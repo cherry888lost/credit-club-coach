@@ -13,7 +13,15 @@ import {
   markFailed,
   getSupabase,
 } from './scoring-processor';
-import { buildScoringPrompt, ScoringResult } from './reasoner-prompt';
+import {
+  buildScoringPrompt,
+  ScoringResult,
+  needsChunking,
+  chunkTranscript,
+  buildChunkAnalysisPrompt,
+  buildMergedScoringPrompt,
+  mergeChunkAnalyses,
+} from './reasoner-prompt';
 
 // ---------------------------------------------------------------------------
 // Config from environment
@@ -50,24 +58,82 @@ export async function processRequest(
   const transcript = validateTranscript(request.transcript);
   console.log(`[PROCESS] Transcript validated, length: ${transcript.length}`);
 
-  // 2. Build prompt (rep_name is the current column, agent_name is legacy)
   const repName = request.rep_name || request.agent_name;
-  const prompt = buildScoringPrompt(transcript, repName);
-
-  // 3. Spawn reasoner and get raw output
   const agentId = config.reasonerAgentId ?? 'reasoner';
-  const rawOutput = await spawnFn(prompt, agentId);
-  console.log(`[PROCESS] Raw output received, length: ${rawOutput.length}`);
-
-  // 4. Parse and validate the output
   let result: ScoringResult;
-  try {
+
+  // 2. Check if chunking needed
+  if (needsChunking(transcript)) {
+    console.log(`[PROCESS] LONG TRANSCRIPT DETECTED (${transcript.length} chars) - Using chunking strategy`);
+
+    // Chunk the transcript
+    const chunks = chunkTranscript(transcript);
+    console.log(`[PROCESS] Split into ${chunks.length} chunks`);
+
+    // Analyze each chunk
+    const chunkAnalyses: any[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(`[PROCESS] Analyzing chunk ${i + 1}/${chunks.length}...`);
+      const chunkPrompt = buildChunkAnalysisPrompt(chunks[i], i, chunks.length, repName);
+
+      let chunkOutput: string;
+      let retries = 0;
+      const maxRetries = 3;
+
+      while (retries < maxRetries) {
+        try {
+          chunkOutput = await spawnFn(chunkPrompt, agentId);
+          const chunkResult = JSON.parse(chunkOutput.trim().replace(/^```json\s*|\s*```$/g, ''));
+          chunkAnalyses.push(chunkResult);
+          console.log(`[PROCESS] Chunk ${i + 1} analyzed successfully`);
+          break;
+        } catch (err: any) {
+          retries++;
+          console.warn(`[PROCESS] Chunk ${i + 1} analysis failed (attempt ${retries}/${maxRetries}): ${err.message}`);
+          if (retries >= maxRetries) {
+            // Push empty analysis on final retry failure
+            chunkAnalyses.push({
+              chunk_summary: `Chunk ${i + 1} analysis failed`,
+              key_moments: [],
+              techniques_used: [],
+              techniques_missed: [],
+              close_attempts: [],
+              critical_quotes: [],
+              objections: [],
+              sentiment: 'neutral'
+            });
+          }
+          // Exponential backoff
+          await new Promise(r => setTimeout(r, 1000 * retries));
+        }
+      }
+    }
+
+    // Merge analyses
+    const mergedSummary = mergeChunkAnalyses(chunkAnalyses);
+    const criticalQuotes = chunkAnalyses.flatMap(a => a.critical_quotes || []);
+    console.log(`[PROCESS] Merged ${chunkAnalyses.length} chunk analyses, ${criticalQuotes.length} critical quotes`);
+
+    // Build final scoring prompt from merged summary
+    const finalPrompt = buildMergedScoringPrompt(mergedSummary, criticalQuotes, repName);
+    console.log(`[PROCESS] Final scoring prompt built from merged summary`);
+
+    // Final scoring pass
+    const rawOutput = await spawnFn(finalPrompt, agentId);
+    console.log(`[PROCESS] Final scoring output received, length: ${rawOutput.length}`);
+
     result = parseReasonerOutput(rawOutput);
-  } catch (parseErr: any) {
-    console.error(`[PROCESS] Parse error: ${parseErr.message}`);
-    throw parseErr;
+
+  } else {
+    // Standard single-pass scoring for short transcripts
+    console.log(`[PROCESS] Standard scoring (no chunking needed)`);
+    const prompt = buildScoringPrompt(transcript, repName);
+    const rawOutput = await spawnFn(prompt, agentId);
+    console.log(`[PROCESS] Raw output received, length: ${rawOutput.length}`);
+    result = parseReasonerOutput(rawOutput);
   }
-  console.log(`[PROCESS] Parsed successfully: overall_score=${result.overall_score}, quality_label=${result.quality_label}, outcome=${result.outcome}`);
+
+  console.log(`[PROCESS] Parsed successfully: overall_score=${result.overall_score}, quality_label=${result.quality_label}, outcome=${result.outcome}, close_type=${result.close_type}`);
 
   // 5. Write score to call_scores
   if (config.dryRun) {

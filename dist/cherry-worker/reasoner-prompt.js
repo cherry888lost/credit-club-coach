@@ -4,8 +4,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SCORING_RUBRIC = void 0;
 exports.buildScoringPrompt = buildScoringPrompt;
-exports.sanitizeOutput = sanitizeOutput;
-exports.sanitizeScoringResult = sanitizeScoringResult;
 const fs_1 = require("fs");
 const path_1 = require("path");
 // ---------------------------------------------------------------------------
@@ -31,7 +29,6 @@ const CREDIT_CLUB_SCORING_RULES = loadKnowledgeFile('credit-club-scoring-rules.m
 // const CREDIT_CLUB_APPROVED_LEARNINGS = loadKnowledgeFile('credit-club-approved-learnings.md');
 // ---------------------------------------------------------------------------
 // Credit Club Knowledge Base Loading (~/credit-club-kb/)
-// PRIMARY COACHING FRAMEWORK - These MD files are the main visible teaching source
 // ---------------------------------------------------------------------------
 const KB_ROOT = (0, path_1.join)(process.env.HOME || '/Users/papur', 'credit-club-kb');
 function loadKBDirectory(subdir) {
@@ -48,14 +45,12 @@ function loadKBDirectory(subdir) {
         return '';
     }
 }
-// PRIMARY FRAMEWORK: These MD files are the main coaching source
 const KB_CLOSES = loadKBDirectory('closes');
 const KB_OBJECTIONS = loadKBDirectory('objections');
 const KB_TECHNIQUES = loadKBDirectory('techniques');
 const KB_PRICING = loadKBDirectory('pricing');
 // ---------------------------------------------------------------------------
-// Internal Benchmark Library (~/credit-club-kb/benchmarks/)
-// HIDDEN CALIBRATION ONLY - Used internally, NEVER exposed in output
+// Benchmark Library Loading (~/credit-club-kb/benchmarks/)
 // ---------------------------------------------------------------------------
 const BENCHMARK_ROOT = (0, path_1.join)(KB_ROOT, 'benchmarks');
 const BENCHMARK_LIBRARY = {
@@ -101,29 +96,28 @@ function loadBenchmarksForCloseType(closeType) {
             const lines = content.split('\n');
             const keyLines = [];
             let inWinningPatterns = false;
+            let inKeyQuotes = false;
             for (const line of lines) {
                 if (line.startsWith('## Winning Patterns') || line.startsWith('## Key Lines') || line.startsWith('## Key Quotes')) {
                     inWinningPatterns = true;
-                    // Strip any names from the content - use anonymous patterns only
-                    keyLines.push(line.replace(/Bina Patel|Luke Cockle|Emma Foster|Omar Pike|Fernando Cotrim|Georgia Smith|Mohit Garg|Rachel|Andrika Das|Shamil Morjaria|Nirmohan Singh Grover|Prismek Wegroc/g, 'Example'));
+                    keyLines.push(line);
                 }
                 else if (line.startsWith('## ')) {
                     inWinningPatterns = false;
                 }
                 else if (inWinningPatterns && line.trim()) {
-                    // Strip names from content
-                    keyLines.push(line.replace(/Bina Patel|Luke Cockle|Emma Foster|Omar Pike|Fernando Cotrim|Georgia Smith|Mohit Garg|Rachel|Andrika Das|Shamil Morjaria|Nirmohan Singh Grover|Prismek Wegroc/g, 'Example'));
+                    keyLines.push(line);
                 }
             }
-            parts.push(`### Example\n${keyLines.slice(0, 100).join('\n')}`);
+            parts.push(`### ${bm.name}\n${keyLines.slice(0, 100).join('\n')}`);
         }
     }
     return parts.join('\n\n---\n\n');
 }
-// Internal calibration material - NEVER expose these names in output
+// Load all benchmarks
 const KB_BENCHMARKS = Object.keys(BENCHMARK_LIBRARY).map(type => {
     const benchmarks = loadBenchmarksForCloseType(type);
-    return benchmarks ? `=== ${type.toUpperCase().replace('_', ' ')} PATTERNS ===\n${benchmarks}` : '';
+    return benchmarks ? `=== ${type.toUpperCase().replace('_', ' ')} BENCHMARKS ===\n${benchmarks}` : '';
 }).filter(Boolean).join('\n\n');
 exports.SCORING_RUBRIC = {
     categories: [
@@ -147,77 +141,89 @@ function buildScoringPrompt(transcript, agentName) {
     return `You are an expert sales call analyst and coach for Credit Club, a UK-focused credit, business-card, points-and-travel education and implementation programme. ${agentCtx}
 
 ================================================================================
-PRIMARY FRAMEWORK: SALES PATTERNS & TECHNIQUES (Use These As Main Guidance)
+FILE 1: CREDIT CLUB CONTEXT (What Credit Club Is)
 ================================================================================
-These MD knowledge files are your PRIMARY source for coaching and scoring guidance.
-All analysis, recommendations, and "what to say instead" must be based on these patterns.
+
+${CREDIT_CLUB_CONTEXT}
+
+================================================================================
+FILE 2: CREDIT CLUB OFFER MECHANISM (What Members Receive)
+================================================================================
+
+${CREDIT_CLUB_OFFER_MECHANISM}
+
+================================================================================
+FILE 3: CREDIT CLUB CLOSE TYPES (Outcome Classification Rules)
+================================================================================
+
+${CREDIT_CLUB_CLOSE_TYPES}
+
+================================================================================
+FILE 4: CREDIT CLUB SCORING RULES (Category Scoring Guide)
+================================================================================
+
+${CREDIT_CLUB_SCORING_RULES}
+
+================================================================================
+KNOWLEDGE BASE: CLOSE PATTERNS (Benchmark Examples)
+================================================================================
+Use these as benchmark patterns. Compare the transcript against these real examples.
 
 ${KB_CLOSES}
 
 ================================================================================
-PRIMARY FRAMEWORK: OBJECTION HANDLING PATTERNS
+KNOWLEDGE BASE: OBJECTION HANDLING PATTERNS
 ================================================================================
-These are the objection types and handling patterns. Use these to score handling.
+These are the objection types and handling patterns from real calls. Score the rep's handling against these benchmarks.
 
 ${KB_OBJECTIONS}
 
 ================================================================================
-PRIMARY FRAMEWORK: SALES TECHNIQUES (Value Stacking & Urgency)
+KNOWLEDGE BASE: SALES TECHNIQUES (Value Stacking & Urgency)
 ================================================================================
 These are the techniques that elite reps use. Score whether the rep used them effectively.
 
 ${KB_TECHNIQUES}
 
 ================================================================================
-PRIMARY FRAMEWORK: PRICING PSYCHOLOGY
+KNOWLEDGE BASE: PRICING PSYCHOLOGY
 ================================================================================
-This is how pricing should be positioned. Evaluate pricing conversation against these patterns.
+This is how pricing should be positioned. Evaluate the rep's pricing conversation against these patterns.
 
 ${KB_PRICING}
 
 ================================================================================
-INTERNAL CALIBRATION: WINNING CALL PATTERNS (Hidden Reference Material)
+BENCHMARK CALL LIBRARY (12 Reference Calls)
 ================================================================================
-These are INTERNAL calibration examples only. Use them to understand what "good" looks like
-by close type, but NEVER reference these by name in your output. NEVER say things like:
-- "This matched [Name]'s technique"
-- "[Name] handled this by..."
-- "Compared to [Name]..."
-
-Instead, use anonymous pattern language:
-- "This matched a strong [close-type] pattern"
-- "A better response would be to..."
-- "The rep missed the urgency bridge"
+These are REAL successful calls to compare against. For each close type, study:
+- The winning patterns used
+- Key lines and phrases
+- How objections were handled
+- How the close was structured
 
 ${KB_BENCHMARKS}
 
 ================================================================================
-CRITICAL OUTPUT RULES
+BENCHMARK COMPARISON INSTRUCTIONS
 ================================================================================
+When scoring, explicitly compare this call to the benchmarks:
 
-1. **NEVER name benchmark sources**: Do NOT mention Omar Pike, Fernando Cotrim, Luke Cockle, 
-   Emma Foster, Bina Patel, Georgia Smith, Mohit Garg, Rachel, Andrika Das, Shamil Morjaria,
-   Nirmohan Singh Grover, or Prismek Wegroc in ANY output field.
+1. **Identify the closest benchmark** by close type detected
+2. **What this rep did similarly** to the benchmark winners
+3. **What this rep missed** that benchmark winners did
+4. **Specific lines to model** from benchmarks that would improve this call
+5. **Gap analysis**: Score lower if rep missed techniques that benchmarks show work
 
-2. **Use anonymous patterns**: Say "a strong deposit-close pattern" not "Omar's technique".
-   Say "elite objection handling" not "Fernando's approach".
-
-3. **"What to say instead" must be framework-based**: Use patterns from the MD files above,
-   not verbatim quotes from benchmark transcripts.
-
-4. **Coaching tone**: Sound like a sales trainer, not a document retrieval system.
-   - GOOD: "Isolate the objection, reassure, then ask for a smaller commitment."
-   - BAD: "Omar handled this by saying..."
-
-5. **Pattern comparison section**: Compare to "winning patterns" not specific people.
+Include a "benchmark_comparison" section in your JSON output with:
+- matched: ["techniques the rep used that match benchmarks"]
+- missed: ["techniques from benchmarks the rep missed"]
+- what_to_say_instead: ["specific lines from benchmarks they should have used"]
 
 ================================================================================
 YOUR TASK
 ================================================================================
 
-Analyze the following sales call transcript and produce a detailed scoring assessment.
-Use the PRIMARY FRAMEWORK MD files as your main guidance.
-Use INTERNAL CALIBRATION only for understanding what good looks like.
+Analyze the following sales call transcript and produce a detailed scoring assessment. Compare the rep's performance against the knowledge base patterns above.
 
 ## IMPORTANT: Transcript Format Handling
 
@@ -263,76 +269,29 @@ When analyzing:
 
 **REWARD (score higher):**
 - Strong discovery that uncovers specific pain points, goals, timeline, and motivation
-- Pain amplification that connects credit problems to real-life consequences (travel, family, business)
-- Clear offer explanation tied to prospect's specific situation
-- Confident, assumptive close attempts with urgency
-- Effective objection handling: isolate → empathize → reframe → close
-- Next steps that are specific, time-bound, and committed
-- Call control: guiding conversation, redirecting tangents, maintaining authority
+- Pain amplification that deepens emotional impact of credit/financial problems
+- Clear value stack using ROI math, software demo, testimonials, support system, community
+- Precise objection handling: isolate → empathize → reframe (compare against KB objection patterns)
+- Clear close ask — actually asking for the sale, not hinting
+- Deposit/commitment/payment plan attempt when full close isn't possible
+- Good next steps with specific dates, times, actions
+- Confidence and authority throughout
 
 **PENALIZE (score lower):**
-- Weak discovery: generic questions, not digging into "why"
-- Skipping pain amplification: rushing to offer without emotional connection
-- Poor offer explanation: features without benefits, not tied to prospect's pain
-- No close attempt or weak ask: "so what do you think?" vs "let's get you started"
-- Missing objections: letting concerns go unaddressed
-- Losing call control: letting prospect ramble, ask all the questions, control timeline
-- Vague next steps: "I'll call you sometime" vs "I'll call you Tuesday at 2pm"
+- Generic rapport with no substance (small talk that goes nowhere)
+- Weak discovery — not asking about credit situation, goals, timeline
+- No pain amplification — accepting surface-level problems
+- No close ask — never actually asking for the sale
+- No commitment attempt — not offering deposit, payment plan, or partial access when prospect stalls
+- Vague next steps — "I'll send you some info" or "let me know"
+- Soft objection handling — accepting "I need to think about it" at face value without probing
+- Fake urgency — artificial scarcity that isn't real
+- Missing deposit attempt when prospect can't pay in full
 
-## What Elite Reps Do That Average Reps Miss
+## OUTPUT QUALITY REQUIREMENTS
 
-**Elite reps always:**
-1. **Qualify hard upfront** - make sure prospect has pain and motivation
-2. **Amplify pain with specifics** - "so you're telling me you've been declined 3 times, how did that feel?"
-3. **Connect offer to exact pain** - "this gets you to Japan in business class with your father"
-4. **Create urgency** - anniversary pricing, limited spots, price increases
-5. **Assume the close** - "when we get you started" not "if you decide to join"
-6. **Handle objections before they come up** - address price, timing, trust proactively
-7. **Get explicit commitment** - specific next step with time and action
-
-**Average reps often:**
-1. Rush discovery or skip it entirely
-2. Present offer generically without connecting to pain
-3. Fail to create urgency - "take your time, no pressure"
-4. Ask weak close questions - "what do you think?"
-5. Let objections slide or handle them defensively
-6. End with vague next steps - "I'll follow up with you"
-7. Lose control of the call to the prospect
-
-## Output Style Guidelines
-
-**DO:**
-- Write like a sales coach giving actionable feedback
-- Reference patterns from the PRIMARY FRAMEWORK MD files
-- Use "what worked" and "what hurt the call" framing
-- Give specific improved wording in "what_to_say_instead"
-- Focus on behaviors and patterns, not people
-
-**DON'T:**
-- Name or cite specific benchmark sources (Omar, Fernando, etc.)
-- Sound like you're retrieving from documents
-- Use generic platitudes without transcript evidence
-- Miss the emotional/psychological aspects of the sale
-
-## Scoring Rubric — 10 Categories (0–10 each)
-
-For each category, assign an integer score 0–10, explain your reasoning in 1–2 sentences, and quote a short verbatim excerpt from the transcript as evidence.
-
-1. **rapport_tone** — Did the agent build genuine rapport? Warm, conversational, empathetic? Or robotic/scripted?
-2. **discovery_quality** — Did the agent ask probing questions to understand the client's situation, goals, and timeline? Did they uncover the real motivation?
-3. **call_control** — Did the agent guide the conversation or let the prospect ramble? Did they redirect tangents and maintain authority?
-4. **pain_amplification** — Did the agent deepen the emotional impact of the prospect's credit problems? Did they connect poor credit to real-life consequences?
-5. **offer_explanation** — Was the Credit Club offer clearly explained? Were benefits tied to the prospect's specific pain points?
-6. **objection_handling** — How well did the agent address concerns (price, timing, trust, spouse, etc.)? Did they isolate, empathize, and reframe?
-7. **urgency_close_attempt** — Did the agent create urgency? Did they actually ask for the sale? How many close attempts?
-8. **confidence_authority** — Did the agent sound confident, knowledgeable, and authoritative? Or uncertain and hesitant?
-9. **next_steps_clarity** — Were clear next steps established? Does the prospect know exactly what happens next?
-10. **overall_close_quality** — Holistic assessment of the close attempt. Was it natural, assumptive, and well-timed?
-
-## Analysis Requirements
-
-Your analysis must cover:
-1. **What the rep did well** — cite specific transcript moments
+Your output MUST include:
+1. **What the rep did well** — cite specific transcript moments, not generic praise
 2. **What the rep did poorly** — cite specific transcript moments where they lost ground
 3. **Exact moments that reduced close chance** — what specific thing did/didn't happen that hurt the deal
 4. **Every objection that came up** — list them all with verbatim quotes
@@ -381,10 +340,10 @@ Return ONLY valid JSON matching this exact structure (no markdown fences, no com
   "objections_handled_well": ["<objection handled well with what rep said>", ...],
   "objections_missed": ["<objection missed or poorly handled — what they should have done>", ...],
   "next_coaching_actions": ["<specific actionable coaching tip referencing KB patterns>", ...],
-  "pattern_comparison": {
-    "matched": ["<patterns this rep used successfully>", ...],
-    "missed": ["<patterns from winning calls that were missed>", ...],
-    "what_to_say_instead": ["<improved wording based on framework patterns>", ...]
+  "benchmark_comparison": {
+    "matched": ["<techniques used that match benchmarks>", ...],
+    "missed": ["<techniques from benchmarks that were missed>", ...],
+    "what_to_say_instead": ["<specific lines from benchmarks they should have used>", ...]
   },
   "coaching_markers": [
     {
@@ -409,93 +368,33 @@ Extract 5-10 key coaching moments from the transcript. These are specific timest
 - Missed close opportunities (negative)
 - Good pain amplification (positive)
 - Poor offer explanation (negative)
+- Good urgency creation (positive)
+- Weak next steps (negative)
 
-Be specific with timestamps. For each marker, explain WHY it matters in the context of the sale.
+Rules:
+- Each marker MUST be grounded in actual transcript content
+- Use real timestamps if they appear in the transcript
+- If no timestamps are available, estimate approximate position based on transcript flow and set timestamp to "~MM:SS" (approximate)
+- Do NOT hallucinate timestamps — if you cannot determine timing, use "00:00" with seconds=0 and note it in the marker
+- Focus on the 5-10 most useful moments for a coaching review
+- Mix of positive and negative markers
+- severity=high for critical coaching moments, medium for notable ones, low for minor observations
+
+## Scoring Reminders
+
+1. Score real sales effectiveness, not generic friendliness
+2. Do not over-score weak calls — most calls score 40-70
+3. Do not reward empty rapport or generic small talk
+4. Do not guess outcomes or close types without evidence
+5. Prefer accurate null over guessed close_type
+6. Use the exact rubric definitions from File 4 for each category
+7. All evidence quotes must be verbatim from the transcript
+8. Compare rep's performance against KB benchmark patterns — did they use the techniques from the knowledge base?
+9. Be brutally honest — generic filler feedback is useless for coaching
 
 ================================================================================
-TRANSCRIPT TO ANALYZE
+TRANSCRIPT
 ================================================================================
 
-${transcript}
-
-================================================================================
-END OF TRANSCRIPT
-================================================================================
-
-Remember:
-1. Use PRIMARY FRAMEWORK MD files as main guidance
-2. INTERNAL CALIBRATION is for your understanding only - NEVER cite names
-3. Write like a sales coach, not a document retriever
-4. All coaching must be actionable and specific
-5. NEVER mention: Omar Pike, Fernando Cotrim, Luke Cockle, Emma Foster, Bina Patel, Georgia Smith, Mohit Garg, Rachel, Andrika Das, Shamil Morjaria, Nirmohan Singh Grover, Prismek Wegroc
-`;
-}
-// ---------------------------------------------------------------------------
-// Post-processing sanitization to catch any leaked benchmark names
-// ---------------------------------------------------------------------------
-const BENCHMARK_NAMES = [
-    'Omar Pike', 'Fernando Cotrim', 'Luke Cockle', 'Emma Foster',
-    'Bina Patel', 'Georgia Smith', 'Mohit Garg', 'Rachel', 'Andrika Das',
-    'Shamil Morjaria', 'Nirmohan Singh Grover', 'Prismek Wegroc', 'Nirmohan', 'Prismek'
-];
-const BENCHMARK_PATTERNS = {
-    'Omar Pike': 'a strong deposit-close example',
-    'Fernando Cotrim': 'a strong objection-handling pattern',
-    'Luke Cockle': 'a strong full-close example',
-    'Emma Foster': 'a strong value-demonstration pattern',
-    'Bina Patel': 'a strong business-owner close pattern',
-    'Georgia Smith': 'a strong timing-based close pattern',
-    'Mohit Garg': 'a strong partial-access pattern',
-    'Rachel': 'a strong BA-card repositioning pattern',
-    'Andrika Das': 'a strong eligibility-checker pattern',
-    'Shamil Morjaria': 'a strong flexible-payment pattern',
-    'Nirmohan Singh Grover': 'a strong pay-after-results pattern',
-    'Nirmohan': 'a strong pay-after-results pattern',
-    'Prismek Wegroc': 'a strong payment-plan pattern',
-    'Prismek': 'a strong payment-plan pattern'
-};
-/**
- * Sanitize output to remove any benchmark names that leaked through
- */
-function sanitizeOutput(text) {
-    let sanitized = text;
-    for (const name of BENCHMARK_NAMES) {
-        const pattern = new RegExp(`\\b${name}\\b`, 'gi');
-        const replacement = BENCHMARK_PATTERNS[name] || 'a winning pattern example';
-        sanitized = sanitized.replace(pattern, replacement);
-    }
-    // Also catch any file name references
-    sanitized = sanitized.replace(/\b\w+_\w+\.md\b/g, 'reference material');
-    return sanitized;
-}
-/**
- * Sanitize entire ScoringResult object
- */
-function sanitizeScoringResult(result) {
-    const sanitizeArray = (arr) => arr.map(s => sanitizeOutput(s));
-    const sanitizeString = (s) => sanitizeOutput(s);
-    return {
-        ...result,
-        strengths: sanitizeArray(result.strengths),
-        weaknesses: sanitizeArray(result.weaknesses),
-        objections_detected: sanitizeArray(result.objections_detected),
-        objections_handled_well: sanitizeArray(result.objections_handled_well),
-        objections_missed: sanitizeArray(result.objections_missed),
-        next_coaching_actions: sanitizeArray(result.next_coaching_actions),
-        coach_summary: {
-            did_well: sanitizeArray(result.coach_summary.did_well),
-            needs_work: sanitizeArray(result.coach_summary.needs_work),
-            action_items: sanitizeArray(result.coach_summary.action_items)
-        },
-        pattern_comparison: result.pattern_comparison ? {
-            matched: sanitizeArray(result.pattern_comparison.matched),
-            missed: sanitizeArray(result.pattern_comparison.missed),
-            what_to_say_instead: sanitizeArray(result.pattern_comparison.what_to_say_instead)
-        } : undefined,
-        coaching_markers: result.coaching_markers.map(m => ({
-            ...m,
-            note: sanitizeString(m.note),
-            title: sanitizeString(m.title)
-        }))
-    };
+${transcript}`;
 }

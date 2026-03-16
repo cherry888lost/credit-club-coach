@@ -212,9 +212,7 @@ function parseReasonerOutput(raw) {
                 marker.note = '';
         }
     }
-    // Sanitize output to remove any leaked benchmark names
-    const sanitized = (0, reasoner_prompt_1.sanitizeScoringResult)(parsed);
-    return sanitized;
+    return parsed;
 }
 // ---------------------------------------------------------------------------
 // Validate transcript before processing

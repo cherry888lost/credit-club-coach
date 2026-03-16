@@ -492,6 +492,145 @@ Remember:
 }
 
 // ---------------------------------------------------------------------------
+// Long Transcript Chunking
+// ---------------------------------------------------------------------------
+
+const MAX_CHUNK_CHARS = 45000; // ~15k tokens per chunk
+const MAX_TOTAL_CHARS = 150000; // Hard ceiling
+
+/**
+ * Check if transcript needs chunking
+ */
+export function needsChunking(transcript: string): boolean {
+  return transcript.length > MAX_CHUNK_CHARS;
+}
+
+/**
+ * Chunk transcript into manageable segments
+ * Preserves speaker turns and natural breakpoints
+ */
+export function chunkTranscript(transcript: string): string[] {
+  if (transcript.length <= MAX_CHUNK_CHARS) {
+    return [transcript];
+  }
+
+  const chunks: string[] = [];
+  const lines = transcript.split('\n');
+  let currentChunk = '';
+
+  for (const line of lines) {
+    // If adding this line would exceed limit, start new chunk
+    if (currentChunk.length + line.length + 1 > MAX_CHUNK_CHARS && currentChunk.length > 0) {
+      chunks.push(currentChunk.trim());
+      currentChunk = '';
+    }
+    currentChunk += line + '\n';
+  }
+
+  // Don't forget the last chunk
+  if (currentChunk.trim().length > 0) {
+    chunks.push(currentChunk.trim());
+  }
+
+  return chunks;
+}
+
+/**
+ * Build interim analysis prompt for a chunk
+ */
+export function buildChunkAnalysisPrompt(chunk: string, chunkIndex: number, totalChunks: number, agentName?: string): string {
+  const agentCtx = agentName ? `The sales agent's name is "${agentName}".` : '';
+
+  return `You are analyzing PART ${chunkIndex + 1} of ${totalChunks} of a sales call transcript.
+${agentCtx}
+
+Analyze this chunk and extract:
+1. Key moments (rapport building, discovery, objections, closes)
+2. Notable techniques used or missed
+3. Any close attempts or commitments
+4. Critical quotes with timestamps
+
+Be concise - this is an interim analysis for merging later.
+
+TRANSCRIPT CHUNK ${chunkIndex + 1}/${totalChunks}:
+${chunk}
+
+Return JSON:
+{
+  "chunk_summary": "2-3 sentence summary of this chunk",
+  "key_moments": ["moment 1", "moment 2"],
+  "techniques_used": ["technique 1"],
+  "techniques_missed": ["missed 1"],
+  "close_attempts": ["close 1"],
+  "critical_quotes": ["@MM:SS - Quote text"],
+  "objections": ["objection 1"],
+  "sentiment": "positive|neutral|negative"
+}`;
+}
+
+/**
+ * Build final scoring prompt from merged chunk analyses
+ */
+export function buildMergedScoringPrompt(
+  mergedSummary: string,
+  criticalQuotes: string[],
+  agentName?: string
+): string {
+  const agentCtx = agentName ? `The sales agent's name is "${agentName}".` : '';
+
+  return `You are scoring a sales call based on INTERIM ANALYSES of transcript chunks.
+${agentCtx}
+
+${buildScoringPrompt('', agentName)}
+
+MERGED SUMMARY FROM ALL CHUNKS:
+${mergedSummary}
+
+CRITICAL QUOTES FROM ALL CHUNKS:
+${criticalQuotes.join('\n')}
+
+BASE YOUR SCORING ON THE MERGED SUMMARY ABOVE, not on raw transcript.
+The merged summary preserves all key moments, objections, closes, and techniques.`;
+}
+
+/**
+ * Merge interim chunk analyses into condensed summary
+ */
+export function mergeChunkAnalyses(analyses: any[]): string {
+  const summaries = analyses.map((a, i) => `\n--- CHUNK ${i + 1} ---\n${a.chunk_summary || 'No summary'}`).join('\n');
+
+  const allKeyMoments = analyses.flatMap((a, i) =>
+    (a.key_moments || []).map((m: string) => `[C${i + 1}] ${m}`)
+  );
+
+  const allTechniquesUsed = [...new Set(analyses.flatMap((a) => a.techniques_used || []))];
+  const allTechniquesMissed = [...new Set(analyses.flatMap((a) => a.techniques_missed || []))];
+  const allCloseAttempts = analyses.flatMap((a, i) =>
+    (a.close_attempts || []).map((c: string) => `[C${i + 1}] ${c}`)
+  );
+  const allObjections = analyses.flatMap((a, i) =>
+    (a.objections || []).map((o: string) => `[C${i + 1}] ${o}`)
+  );
+
+  return `CALL SUMMARY (from ${analyses.length} chunks):${summaries}
+
+KEY MOMENTS ACROSS ALL CHUNKS:
+${allKeyMoments.slice(0, 20).join('\n') || 'None noted'}
+
+TECHNIQUES USED:
+${allTechniquesUsed.join(', ') || 'None noted'}
+
+TECHNIQUES MISSED:
+${allTechniquesMissed.join(', ') || 'None noted'}
+
+CLOSE ATTEMPTS:
+${allCloseAttempts.join('\n') || 'None noted'}
+
+OBJECTIONS HANDLED:
+${allObjections.join('\n') || 'None noted'}`;
+}
+
+// ---------------------------------------------------------------------------
 // Post-processing sanitization to catch any leaked benchmark names
 // ---------------------------------------------------------------------------
 

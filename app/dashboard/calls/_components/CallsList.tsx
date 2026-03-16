@@ -22,6 +22,7 @@ interface Call {
   rep?: Rep;
   score: number | null;
   effectiveOutcome: string | null;
+  effectiveCloseType: string | null;
   hasFlag: boolean;
 }
 
@@ -273,7 +274,7 @@ export function CallsList({ calls, isAdmin, totalCount }: CallsListProps) {
                       </p>
                     </div>
 
-                    {/* Right: Score / Status + Outcome */}
+                    {/* Right: Score / Status + Close Type */}
                     <div className="flex flex-col items-end gap-1 flex-shrink-0">
                       {call.score != null ? (
                         <span
@@ -293,21 +294,43 @@ export function CallsList({ calls, isAdmin, totalCount }: CallsListProps) {
                         </span>
                       )}
 
-                      {call.effectiveOutcome && (
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
-                            call.effectiveOutcome === "closed"
-                              ? "bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400"
-                              : call.effectiveOutcome === "follow_up"
-                              ? "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400"
-                              : call.effectiveOutcome === "no_sale"
-                              ? "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400"
-                              : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500"
-                          }`}
-                        >
-                          {call.effectiveOutcome.replace("_", " ")}
-                        </span>
-                      )}
+                      {(() => {
+                        const closeType = call.effectiveCloseType;
+                        const outcome = call.effectiveOutcome;
+                        
+                        // Map close_type to display label
+                        let label: string;
+                        let colorClass: string;
+                        
+                        if (closeType === "full_close") {
+                          label = "FULL CLOSE";
+                          colorClass = "bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 border border-green-300 dark:border-green-700";
+                        } else if (closeType === "deposit") {
+                          label = "DEPOSIT";
+                          colorClass = "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700";
+                        } else if (closeType === "partial_access") {
+                          label = "PARTIAL ACCESS";
+                          colorClass = "bg-teal-100 dark:bg-teal-900/30 text-teal-800 dark:text-teal-300 border border-teal-300 dark:border-teal-700";
+                        } else if (closeType === "payment_plan") {
+                          label = "PAYMENT PLAN";
+                          colorClass = "bg-cyan-100 dark:bg-cyan-900/30 text-cyan-800 dark:text-cyan-300 border border-cyan-300 dark:border-cyan-700";
+                        } else if (outcome === "no_sale" || outcome === "disqualified") {
+                          label = "NO SALE";
+                          colorClass = "bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 border border-red-300 dark:border-red-700";
+                        } else if (outcome === "follow_up") {
+                          label = "NOT CLOSED";
+                          colorClass = "bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700";
+                        } else {
+                          label = "NOT CLOSED";
+                          colorClass = "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400";
+                        }
+                        
+                        return (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${colorClass}`}>
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </Link>
                 </div>

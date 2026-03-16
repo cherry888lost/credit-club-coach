@@ -126,7 +126,7 @@ export default async function CallsPage({
   // Get scores for lookup
   const { data: scoresData } = await supabase
     .from("call_scores")
-    .select("call_id, overall_score, score_total, close_outcome, score_grade")
+    .select("call_id, overall_score, score_total, close_outcome, close_type, score_grade")
     .eq("org_id", orgId);
 
   const scoreMap = new Map(
@@ -136,6 +136,7 @@ export default async function CallsPage({
         overall_score: (s.overall_score ?? s.score_total) as number | null,
         manual_outcome: null as string | null,
         outcome: s.close_outcome as string | null,
+        close_type: s.close_type as string | null,
         score_total: s.score_total as number | null,
       },
     ]) || []
@@ -151,11 +152,13 @@ export default async function CallsPage({
     const rep = repMap.get(call.rep_id);
     const scoreData = scoreMap.get(call.id);
     const effectiveOutcome = scoreData?.manual_outcome || scoreData?.outcome || null;
+    const effectiveCloseType = scoreData?.close_type || null;
     return {
       ...call,
       rep,
       score: scoreData?.overall_score ?? scoreData?.score_total ?? null,
       effectiveOutcome,
+      effectiveCloseType,
       hasFlag: flaggedCallIds.has(call.id),
     };
   });
