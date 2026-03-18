@@ -81,6 +81,9 @@ export async function GET(request: NextRequest) {
         created_at: rep.created_at,
         updated_at: rep.updated_at,
         sales_role: rep.sales_role,
+        invited_at: rep.invited_at,
+        accepted_at: rep.accepted_at,
+        invite_token: rep.invite_token,
         stats: {
           call_count: rep.calls?.[0]?.count || 0,
           avg_score: avgScore,
@@ -99,7 +102,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/admin/members - Create new member
+// POST /api/admin/members - Create new member via invite
+// NOTE: Prefer using /api/invite-rep for new invites.
+// This endpoint is kept for backward compatibility but now creates invited reps.
 export async function POST(request: NextRequest) {
   try {
     const { userId: adminId } = await auth();
@@ -111,96 +116,86 @@ export async function POST(request: NextRequest) {
     const serviceSupabase = await createServiceClient();
     const { data: admin } = await serviceSupabase
       .from("reps")
-      .select("role")
+      .select("id, role, status")
       .eq("clerk_user_id", adminId)
       .single();
 
-    if (!admin || admin.role !== "admin") {
+    if (!admin || admin.role !== "admin" || admin.status !== "active") {
       return NextResponse.json({ error: "Admin access required" }, { status: 403 });
     }
 
     const body = await request.json();
     const { name, email, role, sales_role, fathom_email } = body;
 
-    if (!name || !email || !role) {
+    if (!name || !email) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    if (!['admin', 'member'].includes(role)) {
+    if (role && !['admin', 'member'].includes(role)) {
       return NextResponse.json({ error: "Invalid role. Must be 'admin' or 'member'." }, { status: 400 });
     }
     
-    // Validate sales_role if provided
     if (sales_role && !['closer', 'sdr'].includes(sales_role)) {
       return NextResponse.json({ error: "Invalid sales_role. Must be 'closer', 'sdr', or null." }, { status: 400 });
     }
 
-    // Check if email already exists
+    // Check if email already exists (case-insensitive)
     const { data: existing } = await serviceSupabase
       .from("reps")
       .select("id")
-      .eq("email", email.toLowerCase())
+      .ilike("email", email.toLowerCase())
       .single();
 
     if (existing) {
       return NextResponse.json({ error: "A member with this email already exists" }, { status: 409 });
     }
 
-    // Create user in Clerk
-    const clerk = await clerkClient();
-    let clerkUser;
-    
-    try {
-      clerkUser = await clerk.users.createUser({
-        emailAddress: [email],
-        firstName: name.split(' ')[0],
-        lastName: name.split(' ').slice(1).join(' ') || undefined,
-        password: generateTempPassword(),
-        skipPasswordChecks: false,
-        publicMetadata: {
-          role: role,
-          org_id: DEFAULT_ORG_ID,
-        },
-      });
-    } catch (err: any) {
-      console.error("[ADMIN_MEMBERS] Clerk create error:", err);
-      return NextResponse.json(
-        { error: err.errors?.[0]?.message || "Failed to create user in Clerk" },
-        { status: 400 }
-      );
-    }
+    // Generate invite token
+    const crypto = require("crypto");
+    const inviteToken = crypto.randomUUID();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
 
-    // Create rep in Supabase — role and sales_role are independent
+    // Create rep with invited status — NO Clerk user created upfront
     const { data: newRep, error: repError } = await serviceSupabase
       .from("reps")
       .insert({
         org_id: DEFAULT_ORG_ID,
-        clerk_user_id: clerkUser.id,
         email: email.toLowerCase(),
         fathom_email: fathom_email?.toLowerCase() || null,
         name,
-        role,
+        role: role || "member",
         sales_role: sales_role || null,
-        status: "active",
+        status: "invited",
+        invited_at: new Date().toISOString(),
+        invited_by: admin.id,
+        invite_token: inviteToken,
+        invite_expires_at: expiresAt.toISOString(),
       })
       .select()
       .single();
 
     if (repError) {
-      // Rollback: delete Clerk user
-      try {
-        await clerk.users.deleteUser(clerkUser.id);
-      } catch (e) {
-        console.error("[ADMIN_MEMBERS] Failed to rollback Clerk user:", e);
-      }
       console.error("[ADMIN_MEMBERS] Supabase insert error:", repError);
       return NextResponse.json({ error: repError.message }, { status: 500 });
     }
 
+    // Record invite history
+    await serviceSupabase.from("invite_history").insert({
+      rep_id: newRep.id,
+      invited_by: admin.id,
+      invited_at: new Date().toISOString(),
+      status: "pending",
+    });
+
+    const baseUrl = request.headers.get("origin") || process.env.NEXT_PUBLIC_APP_URL || "";
+    const inviteUrl = `${baseUrl}/accept-invite?token=${inviteToken}`;
+
     return NextResponse.json({
       success: true,
       member: newRep,
-      message: "Member created successfully. They can set their password using the forgot password link.",
+      invite_url: inviteUrl,
+      message: "Invite created. Share the invite link with the new member.",
     });
 
   } catch (error) {
@@ -374,10 +369,10 @@ export async function DELETE(request: NextRequest) {
 
       return NextResponse.json({ success: true, message: "Member permanently deleted" });
     } else {
-      // Soft delete: deactivate
+      // Soft delete: disable
       const { error } = await serviceSupabase
         .from("reps")
-        .update({ status: "inactive", updated_at: new Date().toISOString() })
+        .update({ status: "disabled", updated_at: new Date().toISOString() })
         .eq("id", id);
 
       if (error) {
@@ -396,11 +391,4 @@ export async function DELETE(request: NextRequest) {
   }
 }
 
-function generateTempPassword(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
-  let password = "";
-  for (let i = 0; i < 16; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return password;
-}
+// generateTempPassword removed — invite-only system, no Clerk user creation at invite time

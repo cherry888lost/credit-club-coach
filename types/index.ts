@@ -1,5 +1,5 @@
 export type RepRole = 'admin' | 'member';
-export type RepStatus = 'active' | 'inactive';
+export type RepStatus = 'invited' | 'active' | 'disabled';
 export type SalesRole = 'closer' | 'sdr' | null;
 
 export interface Organization {
@@ -20,6 +20,11 @@ export interface Rep {
   role: RepRole;
   sales_role: SalesRole;
   status: RepStatus;
+  invited_at: string | null;
+  accepted_at: string | null;
+  invited_by: string | null;
+  invite_token: string | null;
+  invite_expires_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -113,4 +118,13 @@ export interface RepWithStats extends Rep {
   avg_score: number | null;
   flagged_count: number;
   last_call_at: string | null;
+}
+
+export interface InviteHistory {
+  id: string;
+  rep_id: string;
+  invited_by: string | null;
+  invited_at: string;
+  accepted_at: string | null;
+  status: 'pending' | 'accepted' | 'expired' | 'revoked';
 }

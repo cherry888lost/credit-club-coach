@@ -6,89 +6,85 @@ export const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
 export interface CurrentUser {
   userId: string;
+  email: string;
   rep: Rep | null;
   orgId: string;
   isOnboarded: boolean;
   error?: string;
+  /** Why user was blocked — used by middleware/layout for redirects */
+  blocked?: 'no_rep' | 'disabled' | 'invited' | 'clerk_mismatch';
 }
 
 /**
- * Get or create rep record for current Clerk user
+ * Look up existing rep by Clerk user ID or email.
+ * NEVER creates a new rep — invite-only system.
  */
-async function getOrCreateRep(
-  userId: string, 
-  email: string, 
-  name: string
-): Promise<{ rep: Rep | null; error: string | null }> {
+async function findRep(
+  userId: string,
+  email: string
+): Promise<{ rep: Rep | null; blocked?: CurrentUser['blocked']; error: string | null }> {
   try {
     const supabase = await createServiceClient();
-    
-    // Check existing by clerk_user_id
-    const { data: existing } = await supabase
+
+    // 1. Try by clerk_user_id first (already linked)
+    const { data: byClerk } = await supabase
       .from("reps")
       .select("*")
       .eq("clerk_user_id", userId)
       .single();
-    
-    if (existing) return { rep: existing as Rep, error: null };
-    
-    // Fallback: match by email for pre-created reps (e.g. added via admin before first login)
+
+    if (byClerk) {
+      const rep = byClerk as Rep;
+      if (rep.status === 'disabled') return { rep, blocked: 'disabled', error: null };
+      if (rep.status === 'invited') return { rep, blocked: 'invited', error: null };
+      return { rep, error: null };
+    }
+
+    // 2. Try by email (case-insensitive) — for pre-invited reps
     if (email) {
-      const { data: emailMatch } = await supabase
+      const { data: byEmail } = await supabase
         .from("reps")
         .select("*")
-        .eq("email", email.toLowerCase())
-        .is("clerk_user_id", null)
+        .ilike("email", email)
         .single();
-      
-      if (emailMatch) {
-        // Link the pre-created rep to this Clerk user
-        const { data: linked, error: linkErr } = await supabase
-          .from("reps")
-          .update({ clerk_user_id: userId, name: name || emailMatch.name })
-          .eq("id", emailMatch.id)
-          .select()
-          .single();
-        
-        if (linked) return { rep: linked as Rep, error: null };
-        if (linkErr) console.error("[auth] Email match link failed:", linkErr.message);
+
+      if (byEmail) {
+        const rep = byEmail as Rep;
+
+        // If this rep already has a different clerk_user_id, block (account takeover)
+        if (rep.clerk_user_id && rep.clerk_user_id !== userId) {
+          return { rep: null, blocked: 'clerk_mismatch', error: "Account already linked to different user" };
+        }
+
+        if (rep.status === 'disabled') return { rep, blocked: 'disabled', error: null };
+
+        // If invited, link the Clerk ID but keep invited status
+        if (rep.status === 'invited') {
+          await supabase
+            .from("reps")
+            .update({ clerk_user_id: userId })
+            .eq("id", rep.id);
+          return { rep: { ...rep, clerk_user_id: userId }, blocked: 'invited', error: null };
+        }
+
+        // Active rep without clerk_user_id — link it
+        if (!rep.clerk_user_id) {
+          const { data: linked } = await supabase
+            .from("reps")
+            .update({ clerk_user_id: userId, accepted_at: rep.accepted_at || new Date().toISOString() })
+            .eq("id", rep.id)
+            .select()
+            .single();
+
+          if (linked) return { rep: linked as Rep, error: null };
+        }
+
+        return { rep, error: null };
       }
     }
-    
-    // First user = admin, others = closer
-    const { count } = await supabase
-      .from("reps")
-      .select("*", { count: "exact", head: true });
-    
-    const role: RepRole = count === 0 ? "admin" : "member";
-    
-    const { data: newRep, error } = await supabase
-      .from("reps")
-      .insert({
-        org_id: DEFAULT_ORG_ID,
-        clerk_user_id: userId,
-        email: email.toLowerCase(),
-        name,
-        role,
-        status: "active",
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      // Handle race condition
-      if (error.code === "23505") {
-        const { data: raceRep } = await supabase
-          .from("reps")
-          .select("*")
-          .eq("clerk_user_id", userId)
-          .single();
-        if (raceRep) return { rep: raceRep as Rep, error: null };
-      }
-      return { rep: null, error: error.message };
-    }
-    
-    return { rep: newRep as Rep, error: null };
+
+    // 3. No rep found — user is not invited
+    return { rep: null, blocked: 'no_rep', error: null };
   } catch (err) {
     return { rep: null, error: err instanceof Error ? err.message : "Unknown error" };
   }
@@ -97,38 +93,44 @@ async function getOrCreateRep(
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const { userId } = await auth();
   if (!userId) return null;
-  
+
   const clerkUser = await currentUser();
   if (!clerkUser) return null;
-  
+
   const email = clerkUser.emailAddresses[0]?.emailAddress || "";
-  const name = clerkUser.firstName && clerkUser.lastName 
+  const name = clerkUser.firstName && clerkUser.lastName
     ? `${clerkUser.firstName} ${clerkUser.lastName}`
     : clerkUser.firstName || clerkUser.lastName || email.split("@")[0] || "User";
-  
-  const { rep, error } = await getOrCreateRep(userId, email, name);
-  
+
+  const { rep, blocked, error } = await findRep(userId, email);
+
   if (!rep) {
     return {
       userId,
+      email,
       rep: null,
       orgId: DEFAULT_ORG_ID,
       isOnboarded: false,
-      error: error || "Failed to create user record",
+      blocked: blocked || 'no_rep',
+      error: error || undefined,
     };
   }
-  
+
   return {
     userId,
+    email,
     rep,
     orgId: DEFAULT_ORG_ID,
-    isOnboarded: true,
+    isOnboarded: rep.status === 'active',
+    blocked,
   };
 }
 
 export async function requireAuth(): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (!user?.userId) throw new Error("Unauthorized");
+  if (user.blocked) throw new Error(`Access denied: ${user.blocked}`);
+  if (!user.rep || user.rep.status !== 'active') throw new Error("No active account");
   return user;
 }
 
@@ -156,8 +158,6 @@ export function hasRole(user: CurrentUser | null, roles: RepRole[]): boolean {
 
 /**
  * Check if user has full admin access.
- * role field: 'admin' | 'member'
- * sales_role field: 'closer' | 'sdr' | null (independent of admin status)
  */
 export function isAdmin(user: CurrentUser | null): boolean {
   if (!user?.rep) return false;
@@ -165,7 +165,7 @@ export function isAdmin(user: CurrentUser | null): boolean {
 }
 
 /**
- * Check if user is a regular sales rep (closer or SDR) — i.e. NOT admin.
+ * Check if user is a regular sales rep — i.e. NOT admin.
  */
 export function isSalesRep(user: CurrentUser | null): boolean {
   if (!user?.rep) return false;
@@ -174,7 +174,6 @@ export function isSalesRep(user: CurrentUser | null): boolean {
 
 /**
  * Get current user with role helpers pre-computed.
- * Returns the user plus boolean flags for easy consumption.
  */
 export async function getCurrentUserWithRole(): Promise<
   (CurrentUser & { isAdminUser: boolean; isSalesRepUser: boolean }) | null
