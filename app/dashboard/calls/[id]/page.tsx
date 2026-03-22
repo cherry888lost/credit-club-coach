@@ -127,10 +127,21 @@ function gradeBgColor(grade: string): string {
 function outcomeColor(outcome: string): string {
   switch (outcome) {
     case "closed": return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400";
-    case "follow_up": return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400";
     case "no_sale": return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400";
     default: return "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400";
   }
+}
+
+// FIXED: New close type display labels
+function closeTypeLabel(closeType: string | null): string {
+  if (!closeType) return "";
+  const labels: Record<string, string> = {
+    full_close: "Full Close",
+    payment_plan: "Payment Plan", 
+    deposit: "Deposit",
+    partial_access: "Partial Access",
+  };
+  return labels[closeType] || closeType;
 }
 
 function breakdownBarColor(pct: number): string {
@@ -286,7 +297,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
 
             {isScored && (
               <span className={`px-2.5 py-1 text-xs font-semibold rounded-full uppercase ${outcomeColor(scores.manual_outcome || scores.outcome || "pending")}`}>
-                {(scores.manual_outcome || scores.outcome || "pending").replace("_", " ")}
+                {closeTypeLabel(scores.manual_close_type || scores.close_type) || (scores.manual_outcome || scores.outcome || "pending").replace("_", " ")}
               </span>
             )}
 

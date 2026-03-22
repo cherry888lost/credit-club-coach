@@ -5,7 +5,7 @@ import { auth } from "@clerk/nextjs/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const VALID_OUTCOMES = ["closed", "follow_up", "no_sale"] as const;
+const VALID_OUTCOMES = ["closed", "no_sale"] as const;
 const VALID_CLOSE_TYPES = ["full_close", "deposit", "payment_plan", "partial_access"] as const;
 
 /**

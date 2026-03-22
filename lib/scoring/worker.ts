@@ -45,11 +45,22 @@ interface BenchmarkComparison {
   what_to_say_instead: string[];
 }
 
+// FIXED: New structured objection detail interface
+interface ObjectionDetail {
+  type: 'MONEY' | 'DELAY' | 'AUTHORITY' | 'SKEPTICISM' | 'KNOWLEDGE' | 'TIME' | 'CONTROL';
+  quote: string;
+  what_rep_did: string;
+  what_rep_should_say: string;
+  why_it_works: string;
+  handled_well: boolean;
+}
+
 interface ScoringResult {
   overall_score: number;
   quality_label: 'poor' | 'average' | 'strong' | 'elite';
-  outcome: 'closed' | 'follow_up' | 'no_sale' | 'disqualified';
-  close_type: 'deposit' | 'full_close' | 'partial_access' | 'payment_plan' | null;
+  outcome: 'closed' | 'no_sale' | 'disqualified';
+  close_type: 'full_close' | 'payment_plan' | 'deposit' | 'partial_access' | null;
+  outcome_confidence?: 'high' | 'medium' | 'low';
   coach_summary: CoachSummary;
   categories: Record<string, CategoryScore>;
   strengths: string[];
@@ -57,6 +68,7 @@ interface ScoringResult {
   objections_detected: string[];
   objections_handled_well: string[];
   objections_missed: string[];
+  objection_details?: ObjectionDetail[];
   next_coaching_actions: string[];
   coaching_markers: any[];
   benchmark_comparison?: BenchmarkComparison;
@@ -99,17 +111,18 @@ const REQUIRED_CATEGORIES = [
 ] as const;
 
 const VALID_QUALITY_LABELS = ['poor', 'average', 'strong', 'elite'] as const;
-const VALID_OUTCOMES = ['closed', 'follow_up', 'no_sale', 'disqualified'] as const;
-const VALID_CLOSE_TYPES = ['deposit', 'full_close', 'partial_access', 'payment_plan'] as const;
+// FIXED: New outcome system - outcome is determined by final result ONLY
+const VALID_OUTCOMES = ['closed', 'no_sale', 'disqualified'] as const;
+const VALID_CLOSE_TYPES = ['full_close', 'payment_plan', 'deposit', 'partial_access'] as const;
 
-const MODEL_VERSION = 'worker-v3.2';
+const MODEL_VERSION = 'worker-v3.3-fixed-outcomes';
 const DEFAULT_ORG_ID = '00000000-0000-0000-0000-000000000001';
 const KB_ROOT = join(process.env.HOME || '/Users/papur', 'credit-club-kb');
 const BENCHMARK_ROOT = join(KB_ROOT, 'benchmarks');
 
-// Approximate tokens: ~4 chars per token for English
+// FIXED: Stricter chunking for long calls - always chunk above ~1500 tokens worth of chars
 const CHARS_PER_TOKEN = 4;
-const MAX_CHUNK_CHARS = 8000; // ~2000 tokens for transcript content
+const MAX_CHUNK_CHARS = 6000; // ~1500 tokens for transcript content (was 8000)
 
 // ── THE FIXED 12 BENCHMARK CALLS ─────────────────────────────────────────────
 
@@ -519,12 +532,55 @@ Credit Club helps UK clients:
 - Full implementation programme: Skool community + training + 1-on-1 Telegram support
 - Price: £3,000 standard | Deposits: £300-500 | Payment plans available
 
-## Close Types
-- full_close: Full £3,000 paid on call
-- deposit: Partial payment (£300-500) to secure place
-- payment_plan: Installment arrangement
-- partial_access: £500 upfront, £2,500 after card approval
+## Close Types (FINAL OUTCOME DETERMINES THIS - NOT DISCUSSION)
+- full_close: Full £3,000 paid AND confirmed on the call
+- payment_plan: Installment arrangement AGREED and CONFIRMED
+- deposit: Partial payment (£300-500) TAKEN and CONFIRMED
+- partial_access: £500 upfront, £2,500 after card approval - AGREED and CONFIRMED
 - null: No close occurred
+
+================================================================================
+CRITICAL: OUTCOME DETERMINATION RULES (NEW - READ CAREFULLY)
+================================================================================
+
+**OUTCOME MUST BE BASED ON FINAL RESULT ONLY — NOT WHAT WAS DISCUSSED**
+
+Allowed outcomes: "closed", "no_sale", "disqualified"
+
+DETERMINE OUTCOME BY:
+1. Did the call end with clear confirmation of payment/commitment? → "closed"
+2. Was there explicit verbal agreement + clear next step for payment? → "closed"  
+3. Everything else → "no_sale"
+
+CLOSE_TYPE DETERMINATION (only when outcome="closed"):
+- full_close: Rep explicitly confirms "£3,000 paid" or "full payment received" or "you're all set"
+- payment_plan: Explicit agreement to installment plan with amounts confirmed
+- deposit: Explicit confirmation deposit was taken (£300-500)
+- partial_access: Explicit agreement to £500 now, £2,500 after approval
+
+**ANTI-GUESSING RULE - CRITICAL:**
+- If outcome is unclear or ambiguous → DEFAULT TO "no_sale"
+- Only mark as "closed" if there is CLEAR verbal confirmation AND clear payment indication
+- Talking about payment plan options does NOT count as payment_plan close
+- Talking about deposit does NOT count as deposit close
+- Prospect saying "I'll think about it" or "I'll do it" without confirmation → "no_sale"
+- Remove ALL "follow_up" outcomes - use "no_sale" instead
+
+================================================================================
+CRITICAL: COACHING LOGIC - FULL CLOSE PRIORITY
+================================================================================
+
+**IF full_close achieved:**
+→ NEVER penalize rep for not offering deposit/payment plan
+→ REWARD strong close
+→ Score 8-10 on overall_close_quality
+
+**IF no_sale (not closed):**
+→ THEN evaluate if deposit/payment plan/partial_access should have been offered
+→ Was there a missed opportunity to collect cash?
+→ Could the rep have tried a bridge close?
+
+GOAL: Maximize CASH collected, not options discussed.
 
 ================================================================================
 FIXED BENCHMARK LIBRARY — THE 12 WINNING CALLS
@@ -544,6 +600,44 @@ ${allBenchmarks}
 ${kbContent}
 
 ================================================================================
+STRUCTURED OBJECTION HANDLING SYSTEM (NEW)
+================================================================================
+
+Detect and classify ALL objections into these 7 categories:
+
+1. **MONEY** - Price, affordability, "too expensive", "can't afford"
+2. **DELAY** - "Need to think about it", "not right time", "call me back"
+3. **AUTHORITY** - "Need to speak to partner", "need to ask wife/husband", "need approval"
+4. **SKEPTICISM** - "Is this legit?", "sounds too good to be true", "scam?"
+5. **KNOWLEDGE** - "Already know points", "can learn this myself", "watched YouTube"
+6. **TIME** - "No time for videos", "too busy", "can't commit right now"
+7. **CONTROL** - "Don't decide on calls", "want contract first", "want to research"
+
+SPECIFIC OBJECTION PHRASES TO DETECT:
+- "need to speak to partner" / "talk to my wife" / "check with husband"
+- "need to think about it" / "let me think" / "sleep on it"
+- "talk to accountant" / "ask my advisor"
+- "too expensive" / "no money" / "can't afford" / "thought it was £2000"
+- "not right time" / "bad timing"
+- "not enough value" / "don't see the point"
+- "skeptical" / "not sure this works"
+- "already know points" / "done this before"
+- "no time for videos" / "too busy"
+- "don't decide on call" / "never buy on calls"
+- "want contract first" / "send me terms"
+- "want to research" / "look into it"
+
+FOR EACH OBJECTION DETECTED, OUTPUT:
+{
+  "type": "MONEY|DELAY|AUTHORITY|SKEPTICISM|KNOWLEDGE|TIME|CONTROL",
+  "quote": "exact words prospect said",
+  "what_rep_did": "exactly what the rep said in response",
+  "what_rep_should_say": "exact script from knowledge base",
+  "why_it_works": "psychology principle from knowledge base",
+  "handled_well": true|false
+}
+
+================================================================================
 YOUR TASK — BENCHMARK-BASED SCORING
 ================================================================================
 
@@ -561,12 +655,12 @@ Score based on how closely the rep follows the proven winning patterns.
 
 ## PENALTY RULES — DEDUCT POINTS IF:
 
-❌ **NO CLOSE ATTEMPT** (-20 points)
+❌ **NO CLOSE ATTEMPT** (-20 points) — UNLESS full_close was achieved
 ❌ **FAILED TO AMPLIFY PAIN** (-15 points)
 ❌ **GENERIC RAPPORT** (-10 points)
 ❌ **FAILED TO ISOLATE OBJECTIONS** (-15 points)
-❌ **ALLOWED DELAY WITHOUT BRIDGE CLOSE** (-15 points)
-❌ **NO DEPOSIT ATTEMPT** (-10 points)
+❌ **ALLOWED DELAY WITHOUT BRIDGE CLOSE** (-15 points) — UNLESS full_close achieved
+❌ **NO DEPOSIT ATTEMPT WHEN NO SALE** (-10 points) — Only penalize if outcome was "no_sale"
 
 ## Scoring Rubric — 10 Categories (0–10 each)
 
@@ -581,7 +675,7 @@ For each category, assign score 0–10, explain reasoning, and quote evidence.
 7. **urgency_close_attempt** — Created urgency? Asked for sale?
 8. **confidence_authority** — Sounded confident and knowledgeable?
 9. **next_steps_clarity** — Clear next steps with dates?
-10. **overall_close_quality** — Close attempted? Alternatives offered?
+10. **overall_close_quality** — Close attempted? Outcome achieved?
 
 ## BENCHMARK COMPARISON SECTION (Required)
 
@@ -600,27 +694,38 @@ Return ONLY valid JSON (no markdown fences):
 {
   "overall_score": 0-100,
   "quality_label": "poor|average|strong|elite",
-  "outcome": "closed|follow_up|no_sale|disqualified",
-  "close_type": null | "deposit|full_close|partial_access|payment_plan",
+  "outcome": "closed|no_sale|disqualified",
+  "close_type": null | "full_close|payment_plan|deposit|partial_access",
+  "outcome_confidence": "high|medium|low",
   "coach_summary": {
-    "did_well": ["specific with evidence"],
-    "needs_work": ["specific weakness with evidence"],
-    "action_items": ["specific action referencing benchmark"]
+    "did_well": ["specific with evidence - reference benchmark calls by name"],
+    "needs_work": ["specific weakness with evidence - reference transcript quotes"],
+    "action_items": ["specific action referencing benchmark and exact script"]
   },
   "categories": {
     "rapport_tone": { "score": 0-10, "reasoning": "...", "evidence": "..." },
     ... (all 10 categories)
   },
-  "strengths": [],
-  "weaknesses": [],
-  "objections_detected": [],
-  "objections_handled_well": [],
-  "objections_missed": [],
-  "next_coaching_actions": [],
+  "strengths": ["specific - quote transcript"],
+  "weaknesses": ["specific - quote transcript"],
+  "objections_detected": ["MONEY: \"exact quote\"", "DELAY: \"exact quote\""],
+  "objections_handled_well": ["MONEY: handled by..."],
+  "objections_missed": ["AUTHORITY: missed opportunity to..."],
+  "objection_details": [
+    {
+      "type": "MONEY",
+      "quote": "exact words",
+      "what_rep_did": "their response",
+      "what_rep_should_say": "exact script from KB",
+      "why_it_works": "psychology",
+      "handled_well": true
+    }
+  ],
+  "next_coaching_actions": ["specific - reference benchmark"],
   "coaching_markers": [],
   "benchmark_comparison": {
     "matched": ["Rep did X — this matched Omar Pike's technique of..."],
-    "missed": ["Rep failed to Y — Fernando Kotrim handled this by..."],
+    "missed": ["Rep failed to Y — Fernando Cotrim handled this by..."],
     "what_to_say_instead": ["Instead of '...', say what Georgia Smith said: '...'"]
   }
 }
@@ -630,7 +735,10 @@ IMPORTANT:
 - Be honest — most calls score 40-70
 - Use actual transcript quotes as evidence
 - Compare against the 12 benchmark calls
-- benchmark_comparison MUST reference specific benchmark names and quotes
+- NO generic advice - only specific benchmark references
+- If outcome unclear, use "no_sale" with outcome_confidence: "low"
+- Never guess outcome - default to no_sale
+- If full_close achieved, never penalize for missing deposit/payment_plan
 
 ## Transcript
 
@@ -729,14 +837,19 @@ function validateAndParse(raw: string): ScoringResult {
     throw new Error(`Invalid quality_label: ${parsed.quality_label}`);
   }
 
+  // FIXED: Validate outcome - only closed, no_sale, disallowed
   if (!VALID_OUTCOMES.includes(parsed.outcome)) {
-    throw new Error(`Invalid outcome: ${parsed.outcome}`);
+    // Auto-convert old "follow_up" to "no_sale"
+    if (parsed.outcome === 'follow_up') {
+      parsed.outcome = 'no_sale';
+    } else {
+      throw new Error(`Invalid outcome: ${parsed.outcome}`);
+    }
   }
 
+  // FIXED: Validate close_type
   if (parsed.close_type !== null && parsed.close_type !== undefined) {
-    if (parsed.close_type === 'full_close') {
-      parsed.close_type = null;
-    } else if (typeof parsed.close_type === 'string' && !VALID_CLOSE_TYPES.includes(parsed.close_type as any)) {
+    if (!VALID_CLOSE_TYPES.includes(parsed.close_type as any)) {
       throw new Error(`Invalid close_type: ${parsed.close_type}`);
     }
   }
@@ -785,6 +898,11 @@ function validateAndParse(raw: string): ScoringResult {
     if (!Array.isArray(parsed.benchmark_comparison.what_to_say_instead)) parsed.benchmark_comparison.what_to_say_instead = [];
   }
 
+  // FIXED: Ensure objection_details exists for structured objection system
+  if (!Array.isArray(parsed.objection_details)) {
+    parsed.objection_details = [];
+  }
+
   return parsed as ScoringResult;
 }
 
@@ -810,7 +928,8 @@ async function writeScore(
     professionalism: Math.round(((catScore('confidence_authority') + catScore('call_control')) / 20) * 10),
   };
   
-  const closeOutcome = result.outcome === 'closed' ? 'closed' : (result.outcome === 'follow_up' || result.close_type === 'deposit') ? 'follow_up' : 'no_sale';
+  // FIXED: Simplified close_outcome - no more "follow_up"
+  const closeOutcome = result.outcome === 'closed' ? 'closed' : 'no_sale';
   
   const keyQuotes: Array<{quote: string; context: string; type: string}> = [];
   for (const [key, catData] of Object.entries(result.categories || {})) {
@@ -855,6 +974,8 @@ async function writeScore(
     objections_detected: result.objections_detected,
     objections_handled_well: result.objections_handled_well,
     objections_missed: result.objections_missed,
+    // FIXED: Store structured objection details
+    objection_details: (result as any).objection_details || [],
     next_coaching_actions: result.next_coaching_actions,
     coaching_feedback: result.next_coaching_actions,
     coaching_markers: result.coaching_markers,
@@ -867,6 +988,7 @@ async function writeScore(
     // NEW: Benchmark comparison stored in metadata
     metadata: {
       benchmark_comparison: result.benchmark_comparison || { matched: [], missed: [], what_to_say_instead: [] },
+      outcome_confidence: (result as any).outcome_confidence || 'medium',
     },
     
     status: 'completed',
@@ -1021,14 +1143,18 @@ function combineChunkResults(chunks: any[]): any {
     if (c.benchmark_comparison?.what_to_say_instead) allWhatToSay.push(...c.benchmark_comparison.what_to_say_instead);
   }
   
+  const uniqueMatched = Array.from(new Set(allMatched)).slice(0, 5);
+  const uniqueMissed = Array.from(new Set(allMissed)).slice(0, 5);
+  const uniqueWhatToSay = Array.from(new Set(allWhatToSay)).slice(0, 5);
+  
   return {
     ...best,
     overall_score: avgOverall,
     quality_label: avgOverall >= 81 ? 'elite' : avgOverall >= 61 ? 'strong' : avgOverall >= 41 ? 'average' : 'poor',
     benchmark_comparison: {
-      matched: [...new Set(allMatched)].slice(0, 5),
-      missed: [...new Set(allMissed)].slice(0, 5),
-      what_to_say_instead: [...new Set(allWhatToSay)].slice(0, 5),
+      matched: uniqueMatched,
+      missed: uniqueMissed,
+      what_to_say_instead: uniqueWhatToSay,
     }
   };
 }

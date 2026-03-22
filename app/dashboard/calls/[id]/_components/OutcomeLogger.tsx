@@ -5,7 +5,6 @@ import { CheckCircle, ChevronDown } from "lucide-react";
 
 const OUTCOMES = [
   { value: "closed", label: "Closed", color: "bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800" },
-  { value: "follow_up", label: "Follow Up", color: "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800" },
   { value: "no_sale", label: "No Sale", color: "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800" },
 ];
 
