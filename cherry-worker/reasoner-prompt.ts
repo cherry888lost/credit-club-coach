@@ -384,7 +384,10 @@ For each category, assign an integer score 0–10, explain your reasoning in 1�
 4. **pain_amplification** — Did the agent deepen the emotional impact of the prospect's credit problems? Did they connect poor credit to real-life consequences?
 5. **offer_explanation** — Was the Credit Club offer clearly explained? Were benefits tied to the prospect's specific pain points?
 6. **objection_handling** — How well did the agent address concerns (price, timing, trust, spouse, etc.)? Did they isolate, empathize, and reframe?
-7. **urgency_close_attempt** — Did the agent create urgency? Did they actually ask for the sale? How many close attempts?
+7. **urgency_close_attempt** — This is TWO things: urgency creation + close attempt. Score EACH and average.
+   - **Urgency creation (1-10):** ANY mention of price increases (£3,000→£4,000), anniversary pricing, limited-time offers = score 6+. Travel timeline urgency, opportunity cost framing, deposit-as-urgency-bridge, assumptive urgency language ("when we get you started") = score 5-6+. Even soft urgency ("the sooner you start...") = 4-5. Only score 1-2 if ZERO urgency of any kind.
+   - **Close attempt (1-10):** Direct "let's get you started" or payment ask = 8-9. Asked for commitment/deposit = 6-7. Soft ask ("what do you think?") = 4-5. No close attempt = 1.
+   - DO NOT give below 4 if rep mentioned price increases or limited-time offers. DO NOT say "no urgency created" if ANY urgency signals are present.
 8. **confidence_authority** — Did the agent sound confident, knowledgeable, and authoritative? Or uncertain and hesitant?
 9. **next_steps_clarity** — Were clear next steps established? Does the prospect know exactly what happens next?
 10. **overall_close_quality** — Holistic assessment of the close attempt. Was it natural, assumptive, and well-timed?
