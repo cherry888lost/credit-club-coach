@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { CheckCircle, ChevronDown } from "lucide-react";
 
 const OUTCOMES = [
@@ -20,6 +21,7 @@ export function OutcomeLogger({ callId, initialOutcome, initialCloseType }: {
   initialOutcome?: string | null;
   initialCloseType?: string | null;
 }) {
+  const router = useRouter();
   const [outcome, setOutcome] = useState<string>(initialOutcome || "");
   const [closeType, setCloseType] = useState<string>(initialCloseType || "");
   const [saving, setSaving] = useState(false);
@@ -71,6 +73,8 @@ export function OutcomeLogger({ callId, initialOutcome, initialCloseType }: {
       setSaved(true);
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 2000);
+      // Re-fetch server component data so the header outcome badge updates
+      router.refresh();
     } catch (err: any) {
       setError(err.message);
     } finally {
