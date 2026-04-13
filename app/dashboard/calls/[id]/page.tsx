@@ -296,12 +296,13 @@ export default async function CallDetailPage({ params }: { params: { id: string 
             )}
 
             {isScored && (() => {
-              const effectiveOutcome = scores.manual_outcome || scores.outcome || "pending";
+              // manual_outcome takes priority, then AI fields (outcome OR close_outcome)
+              const effectiveOutcome = scores.manual_outcome || scores.outcome || scores.close_outcome || "pending";
               // Only show close type label when the effective outcome is "closed"
               // (prevents AI close_type from overriding a manual "no_sale" selection)
-              const effectiveCloseType = effectiveOutcome !== "no_sale"
-                ? (scores.manual_close_type || scores.close_type)
-                : null;
+              const effectiveCloseType = effectiveOutcome === "no_sale"
+                ? null
+                : (scores.manual_close_type || scores.close_type);
               return (
                 <span className={`px-2.5 py-1 text-xs font-semibold rounded-full uppercase ${outcomeColor(effectiveOutcome)}`}>
                   {closeTypeLabel(effectiveCloseType) || effectiveOutcome.replace("_", " ")}
@@ -309,9 +310,13 @@ export default async function CallDetailPage({ params }: { params: { id: string 
               );
             })()}
 
-            {isScored && (scores.manual_close_type || scores.close_type) && (scores.manual_outcome || scores.outcome) !== 'no_sale' && (
-              <CloseTypeBadge type={scores.manual_close_type || scores.close_type} />
-            )}
+            {isScored && (() => {
+              const effectiveOutcome = scores.manual_outcome || scores.outcome || scores.close_outcome || "pending";
+              const closeType = scores.manual_close_type || scores.close_type;
+              // Hide close type badge entirely when outcome is no_sale
+              if (!closeType || effectiveOutcome === "no_sale") return null;
+              return <CloseTypeBadge type={closeType} />;
+            })()}
 
             {/* Grade badge for enhanced analysis */}
             {grade && (

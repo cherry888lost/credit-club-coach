@@ -165,7 +165,7 @@ export default async function RepDetailPage({ params }: { params: { name: string
     totalScore += effectiveScore;
     scoredCount++;
 
-    const outcome = scores.close_outcome;
+    const outcome = scores.manual_outcome || scores.close_outcome;
     if (outcome === "closed") closedCount++;
     else if (outcome === "follow_up") followUpCount++;
     else if (outcome === "no_sale") noSaleCount++;

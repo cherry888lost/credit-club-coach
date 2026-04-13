@@ -144,13 +144,13 @@ export default async function DashboardPage() {
   if (weekCallIds.length > 0) {
     const { data } = await supabase
       .from("call_scores")
-      .select("call_id, overall_score, score_total, close_outcome, weaknesses, objections_detected, close_type, grade, score_grade, value_stacking_score, urgency_score, rep_name, score_breakdown")
+      .select("call_id, overall_score, score_total, close_outcome, weaknesses, objections_detected, close_type, grade, score_grade, value_stacking_score, urgency_score, rep_name, score_breakdown, manual_outcome, manual_close_type")
       .in("call_id", weekCallIds);
     weekScores = (data || []).map(s => ({
       ...s,
       overall_score: s.overall_score ?? s.score_total,
       outcome: s.close_outcome,
-      manual_outcome: null,
+      manual_outcome: s.manual_outcome || null,
     }));
   }
   

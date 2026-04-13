@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { auth } from "@clerk/nextjs/server";
+import { revalidatePath } from "next/cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -95,6 +96,11 @@ export async function POST(
         { status: 500 }
       );
     }
+
+    // Bust Next.js cache for the call detail page and calls list
+    revalidatePath(`/dashboard/calls/${callId}`);
+    revalidatePath("/dashboard/calls");
+    revalidatePath("/dashboard");
 
     return NextResponse.json({
       status: "ok",

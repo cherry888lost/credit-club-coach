@@ -165,7 +165,9 @@ export default async function AnalysisPage({
         score_grade,
         score_breakdown,
         coaching_feedback,
-        missed_opportunities
+        missed_opportunities,
+        manual_outcome,
+        manual_close_type
       )
     `)
     .eq("org_id", orgId)
@@ -192,7 +194,7 @@ export default async function AnalysisPage({
           ...s,
           score_total: s.overall_score ?? s.score_total,
           outcome: s.close_outcome,
-          manual_outcome: null,
+          manual_outcome: s.manual_outcome || null,
           categories: null,
           quality_label: s.score_grade,
           rubric_type: null,
