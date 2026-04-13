@@ -126,7 +126,7 @@ export default async function CallsPage({
   // Get scores for lookup
   const { data: scoresData } = await supabase
     .from("call_scores")
-    .select("call_id, overall_score, score_total, close_outcome, close_type, score_grade")
+    .select("call_id, overall_score, score_total, close_outcome, close_type, score_grade, manual_outcome, manual_close_type")
     .eq("org_id", orgId);
 
   const scoreMap = new Map(
@@ -134,9 +134,10 @@ export default async function CallsPage({
       s.call_id,
       {
         overall_score: (s.overall_score ?? s.score_total) as number | null,
-        manual_outcome: null as string | null,
+        manual_outcome: s.manual_outcome as string | null,
         outcome: s.close_outcome as string | null,
         close_type: s.close_type as string | null,
+        manual_close_type: s.manual_close_type as string | null,
         score_total: s.score_total as number | null,
       },
     ]) || []
@@ -152,7 +153,10 @@ export default async function CallsPage({
     const rep = repMap.get(call.rep_id);
     const scoreData = scoreMap.get(call.id);
     const effectiveOutcome = scoreData?.manual_outcome || scoreData?.outcome || null;
-    const effectiveCloseType = scoreData?.close_type || null;
+    // Use manual close type if set; suppress close type entirely for no_sale outcomes
+    const effectiveCloseType = effectiveOutcome === "no_sale"
+      ? null
+      : (scoreData?.manual_close_type || scoreData?.close_type || null);
     return {
       ...call,
       rep,
