@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle, ChevronDown } from "lucide-react";
+import { saveOutcome as saveOutcomeAction } from "../_actions/saveOutcome";
 
 const OUTCOMES = [
   { value: "closed", label: "Closed", color: "bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800" },
@@ -56,24 +57,23 @@ export function OutcomeLogger({ callId, initialOutcome, initialCloseType }: {
     setError(null);
 
     try {
-      const res = await fetch(`/api/calls/${callId}/outcome`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          outcome,
-          close_type: outcome === "closed" ? closeType : undefined,
-        }),
-      });
+      // Use Server Action instead of Route Handler so that revalidatePath
+      // also busts the client-side Router Cache (fixes stale list page)
+      const result = await saveOutcomeAction(
+        callId,
+        outcome,
+        outcome === "closed" ? closeType : undefined,
+      );
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to save");
+      if (result.error) {
+        throw new Error(result.error);
       }
 
       setSaved(true);
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 2000);
-      // Re-fetch server component data so the header outcome badge updates
+      // Server Action already called revalidatePath which refreshes this page
+      // and invalidates the client Router Cache for /dashboard/calls
       router.refresh();
     } catch (err: any) {
       setError(err.message);
