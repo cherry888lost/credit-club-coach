@@ -1,13 +1,13 @@
 /**
- * Credit Club Scoring Worker — THE ONE WORKER (v3.2)
+ * Credit Club Scoring Worker — THE ONE WORKER (v3.4)
  * 
  * Self-contained scoring pipeline with:
- * - FIXED 12-benchmark library (no auto-learning)
- * - Transcript chunking to prevent token overflow
+ * - FIXED benchmark pattern extraction (not full transcripts)
+ * - Reasoner agent integration via spawnFn
  * - Dynamic KB loading (only relevant files)
- * - Benchmark-based scoring comparison
+ * - Benchmark-based scoring comparison with actual quotes
  * 
- * @version 3.2.0 — Fixed 12-benchmark library, benchmark comparison output
+ * @version 3.4.0 — Pattern-extracted benchmarks, reasoner agent support
  */
 
 import { readFileSync, readdirSync } from 'fs';
@@ -45,22 +45,11 @@ interface BenchmarkComparison {
   what_to_say_instead: string[];
 }
 
-// FIXED: New structured objection detail interface
-interface ObjectionDetail {
-  type: 'MONEY' | 'DELAY' | 'AUTHORITY' | 'SKEPTICISM' | 'KNOWLEDGE' | 'TIME' | 'CONTROL';
-  quote: string;
-  what_rep_did: string;
-  what_rep_should_say: string;
-  why_it_works: string;
-  handled_well: boolean;
-}
-
 interface ScoringResult {
   overall_score: number;
   quality_label: 'poor' | 'average' | 'strong' | 'elite';
   outcome: 'closed' | 'no_sale' | 'disqualified';
   close_type: 'full_close' | 'payment_plan' | 'deposit' | 'partial_access' | null;
-  outcome_confidence?: 'high' | 'medium' | 'low';
   coach_summary: CoachSummary;
   categories: Record<string, CategoryScore>;
   strengths: string[];
@@ -68,7 +57,6 @@ interface ScoringResult {
   objections_detected: string[];
   objections_handled_well: string[];
   objections_missed: string[];
-  objection_details?: ObjectionDetail[];
   next_coaching_actions: string[];
   coaching_markers: any[];
   benchmark_comparison?: BenchmarkComparison;
@@ -111,21 +99,18 @@ const REQUIRED_CATEGORIES = [
 ] as const;
 
 const VALID_QUALITY_LABELS = ['poor', 'average', 'strong', 'elite'] as const;
-// FIXED: New outcome system - outcome is determined by final result ONLY
 const VALID_OUTCOMES = ['closed', 'no_sale', 'disqualified'] as const;
 const VALID_CLOSE_TYPES = ['full_close', 'payment_plan', 'deposit', 'partial_access'] as const;
 
-const MODEL_VERSION = 'worker-v3.3-fixed-outcomes';
+const MODEL_VERSION = 'worker-v3.4-pattern-extraction';
 const DEFAULT_ORG_ID = '00000000-0000-0000-0000-000000000001';
 const KB_ROOT = join(process.env.HOME || '/Users/papur', 'credit-club-kb');
 const BENCHMARK_ROOT = join(KB_ROOT, 'benchmarks');
 
-// FIXED: Stricter chunking for long calls - always chunk above ~1500 tokens worth of chars
 const CHARS_PER_TOKEN = 4;
-const MAX_CHUNK_CHARS = 6000; // ~1500 tokens for transcript content (was 8000)
+const MAX_CHUNK_CHARS = 6000; // ~1500 tokens for transcript content
 
-// ── THE FIXED 12 BENCHMARK CALLS ─────────────────────────────────────────────
-
+// FIXED 12-benchmark library
 const BENCHMARK_LIBRARY = {
   full_close: [
     { name: 'Bina Patel', file: 'bina_patel.md' },
@@ -161,8 +146,8 @@ export function loadConfig(): WorkerConfig {
   return {
     supabaseUrl: supabaseUrl.replace(/\/$/, ''),
     supabaseKey,
-    model: 'cherry-reasoner',
-    maxPerCycle: 3,
+    model: process.env.SCORING_OPENAI_MODEL || 'gpt-4.1-mini',
+    maxPerCycle: Number.parseInt(process.env.SCORING_MAX_PER_CYCLE || '1', 10) || 1,
     minTranscriptLength: 500,
     processingTimeoutMinutes: 15,
     maxChunkTokens: 6000,
@@ -180,58 +165,25 @@ function supabaseHeaders(config: WorkerConfig) {
   };
 }
 
-async function supabaseQuery(
-  config: WorkerConfig,
-  table: string,
-  params: string,
-): Promise<any[]> {
+async function supabaseQuery(config: WorkerConfig, table: string, params: string): Promise<any[]> {
   const url = `${config.supabaseUrl}/rest/v1/${table}?${params}`;
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: supabaseHeaders(config),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Supabase GET ${table} failed (${res.status}): ${text}`);
-  }
+  const res = await fetch(url, { method: 'GET', headers: supabaseHeaders(config) });
+  if (!res.ok) throw new Error(`Supabase GET ${table} failed (${res.status}): ${await res.text()}`);
   return res.json();
 }
 
-async function supabaseInsert(
-  config: WorkerConfig,
-  table: string,
-  row: Record<string, any>,
-): Promise<any> {
+async function supabaseInsert(config: WorkerConfig, table: string, row: Record<string, any>): Promise<any> {
   const url = `${config.supabaseUrl}/rest/v1/${table}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: supabaseHeaders(config),
-    body: JSON.stringify(row),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Supabase INSERT ${table} failed (${res.status}): ${text}`);
-  }
+  const res = await fetch(url, { method: 'POST', headers: supabaseHeaders(config), body: JSON.stringify(row) });
+  if (!res.ok) throw new Error(`Supabase INSERT ${table} failed (${res.status}): ${await res.text()}`);
   const data = await res.json();
   return Array.isArray(data) ? data[0] : data;
 }
 
-async function supabaseUpdate(
-  config: WorkerConfig,
-  table: string,
-  filters: string,
-  updates: Record<string, any>,
-): Promise<any[]> {
+async function supabaseUpdate(config: WorkerConfig, table: string, filters: string, updates: Record<string, any>): Promise<any[]> {
   const url = `${config.supabaseUrl}/rest/v1/${table}?${filters}`;
-  const res = await fetch(url, {
-    method: 'PATCH',
-    headers: supabaseHeaders(config),
-    body: JSON.stringify(updates),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Supabase PATCH ${table} failed (${res.status}): ${text}`);
-  }
+  const res = await fetch(url, { method: 'PATCH', headers: supabaseHeaders(config), body: JSON.stringify(updates) });
+  if (!res.ok) throw new Error(`Supabase PATCH ${table} failed (${res.status}): ${await res.text()}`);
   return res.json();
 }
 
@@ -239,7 +191,6 @@ async function supabaseUpdate(
 
 async function pollPending(config: WorkerConfig): Promise<ScoringRequest[]> {
   const cutoff = new Date(Date.now() - config.processingTimeoutMinutes * 60_000).toISOString();
-
   const params = new URLSearchParams({
     'or': `(status.eq.pending,and(status.eq.processing,updated_at.lt.${cutoff}))`,
     'order': 'created_at.asc',
@@ -248,7 +199,6 @@ async function pollPending(config: WorkerConfig): Promise<ScoringRequest[]> {
   });
 
   const requests = await supabaseQuery(config, 'scoring_requests', params.toString());
-
   if (requests.length === 0) return [];
 
   const callIds = requests.map((r: any) => r.call_id);
@@ -260,7 +210,6 @@ async function pollPending(config: WorkerConfig): Promise<ScoringRequest[]> {
 
   const deletedCalls = await supabaseQuery(config, 'calls', deletedParams.toString());
   const deletedIds = new Set(deletedCalls.map((c: any) => c.id));
-
   return requests.filter((r: any) => !deletedIds.has(r.call_id));
 }
 
@@ -272,7 +221,7 @@ async function claimRequest(config: WorkerConfig, requestId: string): Promise<bo
       config,
       'scoring_requests',
       `id=eq.${requestId}&status=in.(pending,processing)`,
-      { status: 'processing', updated_at: new Date().toISOString() },
+      { status: 'processing', started_at: new Date().toISOString(), updated_at: new Date().toISOString() },
     );
     return rows.length > 0;
   } catch {
@@ -283,9 +232,7 @@ async function claimRequest(config: WorkerConfig, requestId: string): Promise<bo
 // ── Transcript Chunking ──────────────────────────────────────────────────────
 
 function chunkTranscript(transcript: string, maxChars: number = MAX_CHUNK_CHARS): string[] {
-  if (transcript.length <= maxChars) {
-    return [transcript];
-  }
+  if (transcript.length <= maxChars) return [transcript];
 
   const chunks: string[] = [];
   const lines = transcript.split('\n');
@@ -293,29 +240,23 @@ function chunkTranscript(transcript: string, maxChars: number = MAX_CHUNK_CHARS)
 
   for (const line of lines) {
     if (currentChunk.length + line.length + 1 > maxChars) {
-      if (currentChunk) {
-        chunks.push(currentChunk.trim());
-      }
+      if (currentChunk) chunks.push(currentChunk.trim());
       currentChunk = line;
     } else {
       currentChunk += (currentChunk ? '\n' : '') + line;
     }
   }
 
-  if (currentChunk) {
-    chunks.push(currentChunk.trim());
-  }
+  if (currentChunk) chunks.push(currentChunk.trim());
 
   if (chunks.length > 1) {
     const overlappingChunks: string[] = [];
     for (let i = 0; i < chunks.length; i++) {
       let chunk = `[PART ${i + 1} OF ${chunks.length}]\n\n`;
-      
       if (i > 0) {
         const prevLines = chunks[i - 1].split('\n').slice(-5);
         chunk += `--- CONTEXT FROM PREVIOUS SECTION ---\n${prevLines.join('\n')}\n--- NEW SECTION ---\n\n`;
       }
-      
       chunk += chunks[i];
       overlappingChunks.push(chunk);
     }
@@ -325,81 +266,160 @@ function chunkTranscript(transcript: string, maxChars: number = MAX_CHUNK_CHARS)
   return chunks;
 }
 
-// ── FIXED BENCHMARK LIBRARY LOADING ───────────────────────────────────────────
+// ── PATTERN EXTRACTION: Extract only winning moments from benchmarks ────────
 
 /**
- * Load a specific benchmark call from the fixed 12-call library.
- * This is the ONLY source of winning call examples.
+ * Extract key winning patterns from a full benchmark transcript.
+ * Instead of loading 600 lines, we extract ~80-120 lines of the most important moments:
+ * - Opening rapport
+ * - Key discovery questions
+ * - Pain amplification
+ * - Objection handling (with exact quotes)
+ * - Close attempt and deposit collection
+ * - Value stacking before price
  */
+function extractBenchmarkPatterns(content: string, benchmarkName: string): string {
+  // If it's a placeholder, return early
+  if (content.includes('[PLACEHOLDER') || content.includes('[To be extracted')) {
+    return `## ${benchmarkName}\n[Benchmark content pending]`;
+  }
+
+  const lines = content.split('\n');
+  const extracted: string[] = [];
+  let inTranscript = false;
+  let section = '';
+
+  // Key pattern markers we want to extract
+  const keyMarkers = [
+    // Discovery / Pain
+    /what.*do for work/i, /how.*credit/i, /struggle/i, /problem/i, /issue/i,
+    /worried/i, /stress/i, /frustrated/i, /annoying/i, /difficult/i,
+    /why.*important/i, /what.*cost/i, /how much.*losing/i,
+    
+    // Value stacking
+    /value/i, /worth/i, /package/i, /everything.*get/i, /included/i,
+    /three thousand/i, /£3,000/i, /3000/i, /price/i, /cost.*programme/i,
+    
+    // Objection handling
+    /need to think/i, /talk to.*wife/i, /talk to.*husband/i, /partner/i,
+    /too expensive/i, /can't afford/i, /money/i, /price.*issue/i,
+    /not right time/i, /not sure/i, /skeptical/i, /scam/i,
+    /need to check/i, /discuss with/i, /ask.*accountant/i,
+    
+    // Urgency / Close
+    /deposit/i, /£300/i, /£500/i, /secure.*place/i, /payment plan/i,
+    /instalment/i, /today/i, /now/i, /this week/i, /limited/i,
+    /only.*spot/i, /join/i, /get started/i, /move forward/i,
+    
+    // Authority / Confidence
+    /guarantee/i, /refund/i, /done this before/i, /helped/i, /clients/i,
+    /results/i, /success/i, /worked for/i,
+  ];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Header info
+    if (line.startsWith('# Benchmark Call:') || line.startsWith('**Close Type:**')) {
+      extracted.push(line);
+      continue;
+    }
+
+    // Detect transcript section
+    if (line.includes('Full Transcript') || line.startsWith('```')) {
+      inTranscript = true;
+      extracted.push('\n## KEY MOMENTS FROM CALL:\n');
+      continue;
+    }
+
+    if (!inTranscript) continue;
+
+    // Skip timestamp-only lines and short responses
+    if (/^\@\d+:\d+\s*-\s*\w+$/.test(line)) continue;
+    if (line.trim().length < 10) continue;
+
+    // Check if this line or nearby lines contain key patterns
+    const contextWindow = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 3)).join(' ');
+    const isKeyMoment = keyMarkers.some(marker => marker.test(contextWindow));
+
+    if (isKeyMoment) {
+      // Include context (2 lines before and 2 after)
+      const startIdx = Math.max(0, i - 2);
+      const endIdx = Math.min(lines.length, i + 3);
+      for (let j = startIdx; j < endIdx; j++) {
+        if (!extracted.includes(lines[j])) {
+          extracted.push(lines[j]);
+        }
+      }
+      extracted.push(''); // spacing
+    }
+  }
+
+  // If we didn't extract enough, take the first 50 lines of transcript as fallback
+  if (extracted.length < 20) {
+    extracted.push('\n[Fallback: First portion of call]\n');
+    let count = 0;
+    for (const line of lines) {
+      if (line.includes('@') && line.includes('-')) {
+        extracted.push(line);
+        count++;
+        if (count > 50) break;
+      }
+    }
+  }
+
+  const result = extracted.join('\n');
+  // Limit to ~4000 chars to keep per-benchmark size reasonable
+  if (result.length > 4000) {
+    return result.slice(0, 4000) + '\n\n[... additional patterns truncated ...]\n';
+  }
+  return result;
+}
+
+// ── Benchmark Library Loading ─────────────────────────────────────────────────
+
 function loadBenchmarkCall(closeType: string, filename: string): string {
   try {
     const filepath = join(BENCHMARK_ROOT, closeType, filename);
-    return readFileSync(filepath, 'utf-8');
+    const full = readFileSync(filepath, 'utf-8');
+    return extractBenchmarkPatterns(full, filename.replace('.md', ''));
   } catch (e) {
     console.warn(`[BENCHMARK] Could not load ${closeType}/${filename}`);
     return '';
   }
 }
 
-/**
- * Load ALL benchmarks for a specific close type (3 calls each).
- */
 function loadBenchmarksForCloseType(closeType: keyof typeof BENCHMARK_LIBRARY): string {
   const benchmarks = BENCHMARK_LIBRARY[closeType];
   const parts: string[] = [];
   
   for (const bm of benchmarks) {
     const content = loadBenchmarkCall(closeType, bm.file);
-    if (content && !content.includes('[PLACEHOLDER')) {
+    if (content && !content.includes('[PLACEHOLDER') && !content.includes('[Benchmark content pending')) {
       parts.push(`## ${bm.name}\n${content}`);
     } else {
-      parts.push(`## ${bm.name}\n[Benchmark transcript pending - placeholder only]`);
+      parts.push(`## ${bm.name}\n[Benchmark content pending - not yet extracted]`);
     }
   }
   
   return parts.join('\n\n---\n\n');
 }
 
-/**
- * Load ALL 12 benchmarks (for maximum context mode).
- */
-function loadAllBenchmarks(): string {
-  const parts: string[] = [];
-  
-  for (const [closeType, benchmarks] of Object.entries(BENCHMARK_LIBRARY)) {
-    parts.push(`\n=== ${closeType.toUpperCase().replace('_', ' ')} EXAMPLES ===\n`);
-    for (const bm of benchmarks) {
-      const content = loadBenchmarkCall(closeType, bm.file);
-      if (content && !content.includes('[PLACEHOLDER')) {
-        parts.push(`## ${bm.name}\n${content}`);
-      }
-    }
-  }
-  
-  return parts.join('\n');
-}
-
-/**
- * Detect likely close type from transcript to select relevant benchmarks.
- */
 function detectLikelyCloseType(transcript: string): keyof typeof BENCHMARK_LIBRARY {
   const lower = transcript.toLowerCase();
   
-  // Check for explicit mentions
   if (/\bpayment.?plan\b|instalment|split.?payment/i.test(lower)) return 'payment_plan';
   if (/\bpartial.?access\b|£500\s*(upfront|now)|after.?approval/i.test(lower)) return 'partial_access';
   if (/\bdeposit\b|£300|£500|secure.*place/i.test(lower)) return 'deposit';
   if (/\bpaid.?in.?full\b|£3,?000.*(today|now|paid)/i.test(lower)) return 'full_close';
   
-  // Check for price resistance patterns
   if (/\bcan.t.afford\b|too expensive|need.to.check|partner|wife|husband/i.test(lower)) return 'deposit';
   if (/\bneed.to.think\b|let.me.think/i.test(lower)) return 'partial_access';
   
-  // Default to deposit (most common successful close type)
   return 'deposit';
 }
 
-// ── Knowledge Base Loading (non-benchmark) ───────────────────────────────────
+// ── Knowledge Base Loading ───────────────────────────────────────────────────
 
 function loadKBDir(subdir: string): string {
   try {
@@ -445,7 +465,7 @@ function getDynamicKB(transcript: string) {
   };
 }
 
-// ── Step 3: Build scoring prompt with benchmarks ─────────────────────────────
+// ── Build Scoring Prompt ─────────────────────────────────────────────────────
 
 function buildMinimalPrompt(transcript: string, repName?: string | null): string {
   const agentCtx = repName ? `The sales agent's name is "${repName}".` : '';
@@ -482,42 +502,29 @@ function buildPrompt(
   
   const agentCtx = repName ? `The sales agent's name is "${repName}".` : '';
   
-  // Load relevant benchmarks based on detected close type
+  // Load only 3 relevant benchmarks (pattern-extracted, ~4KB each)
   const likelyCloseType = benchmarkCloseType || detectLikelyCloseType(transcript);
   const relevantBenchmarks = loadBenchmarksForCloseType(likelyCloseType);
-  const allBenchmarks = loadAllBenchmarks();
   
   const kb = getDynamicKB(transcript);
 
   const kbSections: string[] = [];
-  
-  if (kb.closes) {
-    kbSections.push(`================================================================================
+  if (kb.closes) kbSections.push(`================================================================================
 KNOWLEDGE BASE: CLOSE PATTERNS
 ================================================================================
 ${kb.closes}`);
-  }
-  
-  if (kb.objections) {
-    kbSections.push(`================================================================================
+  if (kb.objections) kbSections.push(`================================================================================
 KNOWLEDGE BASE: OBJECTION HANDLING
 ================================================================================
 ${kb.objections}`);
-  }
-  
-  if (kb.techniques) {
-    kbSections.push(`================================================================================
+  if (kb.techniques) kbSections.push(`================================================================================
 KNOWLEDGE BASE: SALES TECHNIQUES
 ================================================================================
 ${kb.techniques}`);
-  }
-  
-  if (kb.pricing) {
-    kbSections.push(`================================================================================
+  if (kb.pricing) kbSections.push(`================================================================================
 KNOWLEDGE BASE: PRICING PSYCHOLOGY
 ================================================================================
 ${kb.pricing}`);
-  }
 
   const kbContent = kbSections.join('\n\n');
 
@@ -540,12 +547,10 @@ Credit Club helps UK clients:
 - null: No close occurred
 
 ================================================================================
-CRITICAL: OUTCOME DETERMINATION RULES (NEW - READ CAREFULLY)
+CRITICAL: OUTCOME DETERMINATION RULES
 ================================================================================
 
-**OUTCOME MUST BE BASED ON FINAL RESULT ONLY — NOT WHAT WAS DISCUSSED**
-
-Allowed outcomes: "closed", "no_sale", "disqualified"
+**OUTCOME MUST BE BASED ON FINAL RESULT ONLY**
 
 DETERMINE OUTCOME BY:
 1. Did the call end with clear confirmation of payment/commitment? → "closed"
@@ -553,17 +558,15 @@ DETERMINE OUTCOME BY:
 3. Everything else → "no_sale"
 
 CLOSE_TYPE DETERMINATION (only when outcome="closed"):
-- full_close: Rep explicitly confirms "£3,000 paid" or "full payment received" or "you're all set"
+- full_close: Rep explicitly confirms "£3,000 paid" or "full payment received"
 - payment_plan: Explicit agreement to installment plan with amounts confirmed
 - deposit: Explicit confirmation deposit was taken (£300-500)
 - partial_access: Explicit agreement to £500 now, £2,500 after approval
 
-**ANTI-GUESSING RULE - CRITICAL:**
-- If outcome is unclear or ambiguous → DEFAULT TO "no_sale"
-- Only mark as "closed" if there is CLEAR verbal confirmation AND clear payment indication
-- Talking about payment plan options does NOT count as payment_plan close
-- Talking about deposit does NOT count as deposit close
-- Prospect saying "I'll think about it" or "I'll do it" without confirmation → "no_sale"
+**ANTI-GUESSING RULE:**
+- If outcome is unclear → DEFAULT TO "no_sale"
+- Only mark "closed" if there is CLEAR verbal confirmation AND payment indication
+- Talking about options does NOT count as a close
 - Remove ALL "follow_up" outcomes - use "no_sale" instead
 
 ================================================================================
@@ -583,65 +586,23 @@ CRITICAL: COACHING LOGIC - FULL CLOSE PRIORITY
 GOAL: Maximize CASH collected, not options discussed.
 
 ================================================================================
-FIXED BENCHMARK LIBRARY — THE 12 WINNING CALLS
+WINNING BENCHMARK CALLS — PATTERN EXTRACTS (Key Moments Only)
 ================================================================================
 
-You are comparing this call against Credit Club's proven winning call library.
-These are the ONLY benchmark examples — no auto-learning, no dynamic replacement.
+These are extracts from Credit Club's proven winning call library.
+Each extract shows ONLY the most important moments: key discovery questions, pain amplification, objection handling, and close attempts.
 
 ### PRIMARY BENCHMARKS (${likelyCloseType.toUpperCase().replace('_', ' ')})
-These 3 calls are the closest match to this call's likely close type:
 
 ${relevantBenchmarks}
 
-### ALL 12 BENCHMARK CALLS (Reference)
-${allBenchmarks}
-
 ${kbContent}
-
-================================================================================
-STRUCTURED OBJECTION HANDLING SYSTEM (NEW)
-================================================================================
-
-Detect and classify ALL objections into these 7 categories:
-
-1. **MONEY** - Price, affordability, "too expensive", "can't afford"
-2. **DELAY** - "Need to think about it", "not right time", "call me back"
-3. **AUTHORITY** - "Need to speak to partner", "need to ask wife/husband", "need approval"
-4. **SKEPTICISM** - "Is this legit?", "sounds too good to be true", "scam?"
-5. **KNOWLEDGE** - "Already know points", "can learn this myself", "watched YouTube"
-6. **TIME** - "No time for videos", "too busy", "can't commit right now"
-7. **CONTROL** - "Don't decide on calls", "want contract first", "want to research"
-
-SPECIFIC OBJECTION PHRASES TO DETECT:
-- "need to speak to partner" / "talk to my wife" / "check with husband"
-- "need to think about it" / "let me think" / "sleep on it"
-- "talk to accountant" / "ask my advisor"
-- "too expensive" / "no money" / "can't afford" / "thought it was £2000"
-- "not right time" / "bad timing"
-- "not enough value" / "don't see the point"
-- "skeptical" / "not sure this works"
-- "already know points" / "done this before"
-- "no time for videos" / "too busy"
-- "don't decide on call" / "never buy on calls"
-- "want contract first" / "send me terms"
-- "want to research" / "look into it"
-
-FOR EACH OBJECTION DETECTED, OUTPUT:
-{
-  "type": "MONEY|DELAY|AUTHORITY|SKEPTICISM|KNOWLEDGE|TIME|CONTROL",
-  "quote": "exact words prospect said",
-  "what_rep_did": "exactly what the rep said in response",
-  "what_rep_should_say": "exact script from knowledge base",
-  "why_it_works": "psychology principle from knowledge base",
-  "handled_well": true|false
-}
 
 ================================================================================
 YOUR TASK — BENCHMARK-BASED SCORING
 ================================================================================
 
-Compare the transcript below against the winning benchmark calls above.
+Compare the transcript below against the winning benchmark extracts above.
 Score based on how closely the rep follows the proven winning patterns.
 
 ## CRITICAL EVALUATION CRITERIA
@@ -681,11 +642,11 @@ For each category, assign score 0–10, explain reasoning, and quote evidence.
 
 After scoring, generate a benchmark_comparison section with:
 
-- **matched**: Specific things the rep did that matched the winning benchmark calls (quote the benchmark)
-- **missed**: Specific winning patterns the rep failed to use (reference the benchmark they should have used)
-- **what_to_say_instead**: Exact quotes from benchmark calls they should have said
+- **matched**: SPECIFIC things the rep did with EXACT QUOTES from both this call AND the benchmark. Format: "Rep said '[exact quote]' — this matched [Benchmark Name]'s approach of '[exact benchmark quote]'"
+- **missed**: SPECIFIC winning patterns the rep failed to use with EXACT QUOTES from benchmarks. Format: "When prospect said '[quote]', rep should have used [Benchmark Name]'s line: '[exact benchmark quote]'"
+- **what_to_say_instead**: EXACT scripts from benchmark calls. Format: "Instead of '[what rep said]', say what [Benchmark Name] said: '[exact quote]'"
 
-This must reference the actual 12 benchmark calls, not generic advice.
+CRITICAL: Every benchmark reference MUST include an exact quote from that benchmark call. No generic references.
 
 ## Output Format
 
@@ -711,22 +672,12 @@ Return ONLY valid JSON (no markdown fences):
   "objections_detected": ["MONEY: \"exact quote\"", "DELAY: \"exact quote\""],
   "objections_handled_well": ["MONEY: handled by..."],
   "objections_missed": ["AUTHORITY: missed opportunity to..."],
-  "objection_details": [
-    {
-      "type": "MONEY",
-      "quote": "exact words",
-      "what_rep_did": "their response",
-      "what_rep_should_say": "exact script from KB",
-      "why_it_works": "psychology",
-      "handled_well": true
-    }
-  ],
   "next_coaching_actions": ["specific - reference benchmark"],
   "coaching_markers": [],
   "benchmark_comparison": {
-    "matched": ["Rep did X — this matched Omar Pike's technique of..."],
-    "missed": ["Rep failed to Y — Fernando Cotrim handled this by..."],
-    "what_to_say_instead": ["Instead of '...', say what Georgia Smith said: '...'"]
+    "matched": ["Rep did X — this matched [Name]'s technique of..."],
+    "missed": ["Rep failed to Y — [Name] handled this by..."],
+    "what_to_say_instead": ["Instead of '...', say what [Name] said: '...'"]
   }
 }
 
@@ -734,7 +685,7 @@ IMPORTANT:
 - Return ONLY JSON
 - Be honest — most calls score 40-70
 - Use actual transcript quotes as evidence
-- Compare against the 12 benchmark calls
+- Compare against the benchmark extracts
 - NO generic advice - only specific benchmark references
 - If outcome unclear, use "no_sale" with outcome_confidence: "low"
 - Never guess outcome - default to no_sale
@@ -772,8 +723,9 @@ async function callOpenAIDirect(config: WorkerConfig, prompt: string): Promise<s
   }
   
   console.log('[AGENT] Using direct OpenAI API');
+  const model = config.model || process.env.SCORING_OPENAI_MODEL || 'gpt-4.1-mini';
   
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -782,21 +734,21 @@ async function callOpenAIDirect(config: WorkerConfig, prompt: string): Promise<s
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'gpt-4o',
+          model,
           messages: [
             { role: 'system', content: 'You are a sales call scoring expert. Return ONLY valid JSON.' },
             { role: 'user', content: prompt },
           ],
-          temperature: 0.3,
-          max_tokens: 4096,
+          temperature: 0.2,
+          max_tokens: 8192,
           response_format: { type: 'json_object' },
         }),
       });
 
       if (!res.ok) {
         const text = await res.text();
-        if (res.status === 429) {
-          const waitTime = attempt * 8000;
+        if (res.status === 429 || res.status >= 500) {
+          const waitTime = attempt * 20000;
           console.log(`[RATE LIMIT] Waiting ${waitTime}ms`);
           await delay(waitTime);
           continue;
@@ -807,11 +759,34 @@ async function callOpenAIDirect(config: WorkerConfig, prompt: string): Promise<s
       const json = await res.json();
       return json.choices?.[0]?.message?.content || '';
     } catch (e: any) {
-      if (attempt === 3) throw e;
-      await delay(2000 * attempt);
+      if (attempt === 5) throw e;
+      const waitTime = 5000 * attempt;
+      console.log(`[AGENT] Attempt ${attempt} failed (${e?.message || e}); retrying in ${waitTime}ms`);
+      await delay(waitTime);
     }
   }
-  throw new Error('Failed after 3 attempts');
+  throw new Error('Failed after 5 attempts');
+}
+
+async function repairScoringJson(config: WorkerConfig, raw: string, validationError: string): Promise<string> {
+  const repairPrompt = `The previous sales-call scoring response failed validation: ${validationError}
+
+Repair it into valid JSON only. Preserve the meaning where possible, but ensure all required fields exist.
+
+Required top-level fields:
+overall_score number 0-100, quality_label poor|average|strong|elite, outcome closed|no_sale|disqualified, close_type null|full_close|payment_plan|deposit|partial_access, coach_summary {did_well,needs_work,action_items}, categories object, strengths array, weaknesses array, objections_detected array, objections_handled_well array, objections_missed array, next_coaching_actions array, coaching_markers array, benchmark_comparison {matched,missed,what_to_say_instead}.
+
+Required categories, each with score number 0-10, reasoning string, evidence string:
+${REQUIRED_CATEGORIES.join(', ')}
+
+If evidence is missing, write "No specific evidence returned by model; requires manager review".
+If outcome was "follow_up" or "No Close", convert to "no_sale".
+
+Broken JSON/content:
+${raw.slice(0, 24000)}`;
+
+  console.log('[AGENT] Repairing invalid scoring JSON...');
+  return callOpenAIDirect(config, repairPrompt);
 }
 
 // ── Step 5: Validate scoring output ──────────────────────────────────────────
@@ -833,21 +808,20 @@ function validateAndParse(raw: string): ScoringResult {
     throw new Error(`Invalid overall_score: ${parsed.overall_score}`);
   }
 
+  if (typeof parsed.quality_label === 'string') parsed.quality_label = parsed.quality_label.toLowerCase();
   if (!VALID_QUALITY_LABELS.includes(parsed.quality_label)) {
     throw new Error(`Invalid quality_label: ${parsed.quality_label}`);
   }
 
-  // FIXED: Validate outcome - only closed, no_sale, disallowed
+  if (typeof parsed.outcome === 'string') parsed.outcome = parsed.outcome.toLowerCase().replace(/\s+/g, '_');
   if (!VALID_OUTCOMES.includes(parsed.outcome)) {
-    // Auto-convert old "follow_up" to "no_sale"
-    if (parsed.outcome === 'follow_up') {
+    if (parsed.outcome === 'follow_up' || parsed.outcome === 'no_close') {
       parsed.outcome = 'no_sale';
     } else {
       throw new Error(`Invalid outcome: ${parsed.outcome}`);
     }
   }
 
-  // FIXED: Validate close_type
   if (parsed.close_type !== null && parsed.close_type !== undefined) {
     if (!VALID_CLOSE_TYPES.includes(parsed.close_type as any)) {
       throw new Error(`Invalid close_type: ${parsed.close_type}`);
@@ -889,18 +863,12 @@ function validateAndParse(raw: string): ScoringResult {
     if (!Array.isArray(parsed.coach_summary.action_items)) parsed.coach_summary.action_items = [];
   }
 
-  // Ensure benchmark_comparison exists with proper structure
   if (!parsed.benchmark_comparison || typeof parsed.benchmark_comparison !== 'object') {
     parsed.benchmark_comparison = { matched: [], missed: [], what_to_say_instead: [] };
   } else {
     if (!Array.isArray(parsed.benchmark_comparison.matched)) parsed.benchmark_comparison.matched = [];
     if (!Array.isArray(parsed.benchmark_comparison.missed)) parsed.benchmark_comparison.missed = [];
     if (!Array.isArray(parsed.benchmark_comparison.what_to_say_instead)) parsed.benchmark_comparison.what_to_say_instead = [];
-  }
-
-  // FIXED: Ensure objection_details exists for structured objection system
-  if (!Array.isArray(parsed.objection_details)) {
-    parsed.objection_details = [];
   }
 
   return parsed as ScoringResult;
@@ -928,7 +896,6 @@ async function writeScore(
     professionalism: Math.round(((catScore('confidence_authority') + catScore('call_control')) / 20) * 10),
   };
   
-  // FIXED: Simplified close_outcome - no more "follow_up"
   const closeOutcome = result.outcome === 'closed' ? 'closed' : 'no_sale';
   
   const keyQuotes: Array<{quote: string; context: string; type: string}> = [];
@@ -974,8 +941,6 @@ async function writeScore(
     objections_detected: result.objections_detected,
     objections_handled_well: result.objections_handled_well,
     objections_missed: result.objections_missed,
-    // FIXED: Store structured objection details
-    objection_details: (result as any).objection_details || [],
     next_coaching_actions: result.next_coaching_actions,
     coaching_feedback: result.next_coaching_actions,
     coaching_markers: result.coaching_markers,
@@ -984,12 +949,6 @@ async function writeScore(
     missed_opportunities: [...(result.objections_missed || []), ...(result.weaknesses || [])],
     
     coach_summary: result.coach_summary || { did_well: [], needs_work: [], action_items: [] },
-    
-    // NEW: Benchmark comparison stored in metadata
-    metadata: {
-      benchmark_comparison: result.benchmark_comparison || { matched: [], missed: [], what_to_say_instead: [] },
-      outcome_confidence: (result as any).outcome_confidence || 'medium',
-    },
     
     status: 'completed',
     created_at: new Date().toISOString(),
@@ -1014,6 +973,7 @@ async function markCompleted(config: WorkerConfig, requestId: string, scoreId: s
     {
       status: 'completed',
       score_id: scoreId,
+      completed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     },
   );
@@ -1047,13 +1007,6 @@ async function processOne(
     throw new Error(`Transcript too short (${request.transcript?.trim().length || 0} chars, minimum ${config.minTranscriptLength})`);
   }
 
-  const estimatedTranscriptTokens = Math.round(request.transcript.length / CHARS_PER_TOKEN);
-  const useMinimalPrompt = estimatedTranscriptTokens > 15000;
-  
-  if (useMinimalPrompt) {
-    console.log(`[WORKER] Large transcript (${estimatedTranscriptTokens} tokens), using minimal prompt`);
-  }
-  
   // Detect likely close type for benchmark selection
   const likelyCloseType = detectLikelyCloseType(request.transcript);
   console.log(`[WORKER] Detected close type: ${likelyCloseType}`);
@@ -1062,8 +1015,16 @@ async function processOne(
   console.log(`[WORKER] Transcript chunked into ${chunks.length} part(s)`);
 
   if (chunks.length === 1) {
-    const prompt = buildPrompt(chunks[0], request.rep_name, useMinimalPrompt, likelyCloseType);
-    const estimatedTokens = Math.round(prompt.length / CHARS_PER_TOKEN);
+    let prompt = buildPrompt(chunks[0], request.rep_name, false, likelyCloseType);
+    let estimatedTokens = Math.round(prompt.length / CHARS_PER_TOKEN);
+    
+    // Safety guard: if prompt still exceeds 100k tokens, force minimal
+    if (estimatedTokens > 100000) {
+      console.log(`[WORKER] Prompt still too large (${estimatedTokens} tokens), forcing minimal prompt`);
+      prompt = buildMinimalPrompt(chunks[0], request.rep_name);
+      estimatedTokens = Math.round(prompt.length / CHARS_PER_TOKEN);
+    }
+    
     console.log(`[WORKER] Prompt size: ~${estimatedTokens} tokens`);
     
     let raw: string;
@@ -1073,7 +1034,13 @@ async function processOne(
       raw = await callOpenAIDirect(config, prompt);
     }
 
-    const result = validateAndParse(raw);
+    let result: ScoringResult;
+    try {
+      result = validateAndParse(raw);
+    } catch (e: any) {
+      raw = await repairScoringJson(config, raw, e?.message || String(e));
+      result = validateAndParse(raw);
+    }
     const scoreId = await writeScore(config, request.call_id, request.id, result, request.rep_name, request.call_title);
 
     return scoreId;
@@ -1084,12 +1051,20 @@ async function processOne(
   const chunkResults: any[] = [];
   for (let i = 0; i < chunks.length; i++) {
     if (i > 0) {
-      console.log(`[WORKER] Rate limit delay: 5000ms before chunk ${i + 1}`);
-      await delay(5000);
+      console.log(`[WORKER] Rate limit delay: 15000ms before chunk ${i + 1}`);
+      await delay(15000);
     }
     
-    const chunkPrompt = buildPrompt(chunks[i], request.rep_name, useMinimalPrompt, likelyCloseType);
-    const estimatedTokens = Math.round(chunkPrompt.length / CHARS_PER_TOKEN);
+    let chunkPrompt = buildPrompt(chunks[i], request.rep_name, false, likelyCloseType);
+    let estimatedTokens = Math.round(chunkPrompt.length / CHARS_PER_TOKEN);
+    
+    // Safety guard for multi-chunk too
+    if (estimatedTokens > 100000) {
+      console.log(`[WORKER] Chunk prompt too large (${estimatedTokens} tokens), forcing minimal`);
+      chunkPrompt = buildMinimalPrompt(chunks[i], request.rep_name);
+      estimatedTokens = Math.round(chunkPrompt.length / CHARS_PER_TOKEN);
+    }
+    
     console.log(`[WORKER] Processing chunk ${i + 1}/${chunks.length}: ~${estimatedTokens} tokens`);
     
     let raw: string;
@@ -1132,7 +1107,6 @@ function combineChunkResults(chunks: any[]): any {
   
   const avgOverall = Math.round(chunks.reduce((sum, c) => sum + (c.overall_score || 0), 0) / chunks.length);
   
-  // Merge benchmark_comparisons from all chunks
   const allMatched: string[] = [];
   const allMissed: string[] = [];
   const allWhatToSay: string[] = [];
@@ -1165,6 +1139,7 @@ export async function runWorkerCycle(options?: CycleOptions): Promise<CycleStats
   const cfg = loadConfig();
   const spawnFn = options?.spawnFn;
   const maxPerCycle = options?.maxPerCycle ?? cfg.maxPerCycle;
+  cfg.maxPerCycle = maxPerCycle;
   
   const stats: CycleStats = { processed: 0, failed: 0, skipped: 0 };
 
