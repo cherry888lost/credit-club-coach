@@ -16,6 +16,12 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
   const url = req.nextUrl;
   const pathname = url.pathname;
 
+  // Local-only developer bypass for restoring/verifying the dashboard without Clerk email codes.
+  // Never enable this in Vercel/production.
+  if (process.env.NODE_ENV === "development" && process.env.DEV_AUTH_BYPASS === "1") {
+    return;
+  }
+
   // Allow public routes through
   if (isPublicRoute(req)) {
     return;

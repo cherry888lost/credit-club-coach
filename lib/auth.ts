@@ -91,6 +91,38 @@ async function findRep(
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
+  // Local-only developer bypass for dashboard restoration/verification.
+  // This only runs in `next dev` when DEV_AUTH_BYPASS=1 is set locally.
+  if (process.env.NODE_ENV === "development" && process.env.DEV_AUTH_BYPASS === "1") {
+    const email = process.env.DEV_AUTH_EMAIL || "papurcredit@gmail.com";
+    const supabase = await createServiceClient();
+    const { data: rep } = await supabase
+      .from("reps")
+      .select("*")
+      .ilike("email", email)
+      .single();
+
+    if (!rep) {
+      return {
+        userId: "dev-bypass-user",
+        email,
+        rep: null,
+        orgId: DEFAULT_ORG_ID,
+        isOnboarded: false,
+        blocked: "no_rep",
+        error: `DEV_AUTH_EMAIL ${email} not found in reps`,
+      };
+    }
+
+    return {
+      userId: "dev-bypass-user",
+      email,
+      rep: rep as Rep,
+      orgId: DEFAULT_ORG_ID,
+      isOnboarded: (rep as Rep).status === "active",
+    };
+  }
+
   const { userId } = await auth();
   if (!userId) return null;
 

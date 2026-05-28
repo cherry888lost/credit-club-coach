@@ -16,14 +16,19 @@ const CATEGORIES = [
 
 interface Pattern {
   id: string;
-  pattern_category: string;
-  exact_quote: string;
-  explanation: string;
+  pattern_category?: string;
+  pattern_type?: string;
+  exact_quote?: string;
+  quote?: string;
+  explanation?: string;
+  context?: string;
   suggested_action: string | null;
-  ai_confidence: number;
+  ai_confidence?: number;
+  confidence?: number;
   status: string;
   source_call_id: string;
   source_rep_name: string | null;
+  rep_name?: string | null;
   created_at: string;
   calls?: {
     title: string | null;
@@ -75,12 +80,15 @@ export default function PatternsPage() {
 
   // Filter by category and search
   const filteredPatterns = patterns.filter((p) => {
-    if (activeCategory !== "all" && p.pattern_category !== activeCategory)
+    const category = p.pattern_category || p.pattern_type || "other";
+    const quote = p.exact_quote || p.quote || "";
+    const explanation = p.explanation || p.context || "";
+    if (activeCategory !== "all" && category !== activeCategory)
       return false;
     if (
       search &&
-      !(p.exact_quote || "").toLowerCase().includes(search.toLowerCase()) &&
-      !(p.explanation || "").toLowerCase().includes(search.toLowerCase())
+      !quote.toLowerCase().includes(search.toLowerCase()) &&
+      !explanation.toLowerCase().includes(search.toLowerCase())
     )
       return false;
     return true;
@@ -175,30 +183,36 @@ export default function PatternsPage() {
         <>
           {filteredPatterns.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredPatterns.map((pattern) => (
-                <PatternCard
-                  key={pattern.id}
-                  category={
-                    pattern.pattern_category === "close_attempt"
-                      ? "closing_phrases"
-                      : pattern.pattern_category === "urgency"
-                      ? "urgency_creation"
-                      : pattern.pattern_category
-                  }
-                  technique={
-                    pattern.explanation?.split(".")[0] ||
-                    pattern.pattern_category
-                  }
-                  examplePhrase={pattern.exact_quote}
-                  context={pattern.explanation}
-                  effectivenessScore={
-                    pattern.ai_confidence
-                      ? Math.round(pattern.ai_confidence * 10)
-                      : undefined
-                  }
-                  isBenchmark={pattern.status === "promoted"}
-                />
-              ))}
+              {filteredPatterns.map((pattern) => {
+                const category = pattern.pattern_category || pattern.pattern_type || "other";
+                const confidence = pattern.ai_confidence ?? pattern.confidence;
+                return (
+                  <PatternCard
+                    key={pattern.id}
+                    category={
+                      category === "close_attempt"
+                        ? "closing_phrases"
+                        : category === "urgency"
+                        ? "urgency_creation"
+                        : category
+                    }
+                    technique={
+                      (pattern.explanation || pattern.context)?.split(".")[0] ||
+                      category
+                    }
+                    examplePhrase={pattern.exact_quote || pattern.quote || ""}
+                    context={pattern.explanation || pattern.context || ""}
+                    effectivenessScore={
+                      confidence
+                        ? confidence > 1
+                          ? Math.round(confidence / 10)
+                          : Math.round(confidence * 10)
+                        : undefined
+                    }
+                    isBenchmark={pattern.status === "promoted"}
+                  />
+                );
+              })}
             </div>
           )}
 
