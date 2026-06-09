@@ -29,7 +29,7 @@ export default function WebhookHealth() {
   
   useEffect(() => {
     const origin = window.location.origin;
-    setWebhookUrl(`${origin}/api/webhook/fathom`);
+    setWebhookUrl(`${origin}/api/webhooks/fathom`);
   }, []);
   
   const fetchRecentCalls = async () => {

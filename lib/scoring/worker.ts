@@ -191,10 +191,14 @@ async function supabaseUpdate(config: WorkerConfig, table: string, filters: stri
 
 async function pollPending(config: WorkerConfig): Promise<ScoringRequest[]> {
   const cutoff = new Date(Date.now() - config.processingTimeoutMinutes * 60_000).toISOString();
+  // Fetch a wider candidate window before filtering out soft-deleted calls.
+  // Otherwise one old pending request for a deleted call can permanently block the worker
+  // when maxPerCycle is 1.
+  const candidateLimit = Math.max(config.maxPerCycle * 10, config.maxPerCycle + 10);
   const params = new URLSearchParams({
     'or': `(status.eq.pending,and(status.eq.processing,updated_at.lt.${cutoff}))`,
     'order': 'created_at.asc',
-    'limit': String(config.maxPerCycle),
+    'limit': String(candidateLimit),
     'select': 'id,call_id,transcript,rep_name,call_title,call_date,duration_seconds,status,created_at',
   });
 
@@ -210,7 +214,9 @@ async function pollPending(config: WorkerConfig): Promise<ScoringRequest[]> {
 
   const deletedCalls = await supabaseQuery(config, 'calls', deletedParams.toString());
   const deletedIds = new Set(deletedCalls.map((c: any) => c.id));
-  return requests.filter((r: any) => !deletedIds.has(r.call_id));
+  return requests
+    .filter((r: any) => !deletedIds.has(r.call_id))
+    .slice(0, config.maxPerCycle);
 }
 
 // ── Step 2: Atomic claim ─────────────────────────────────────────────────────
