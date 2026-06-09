@@ -197,7 +197,9 @@ async function pollPending(config: WorkerConfig): Promise<ScoringRequest[]> {
   const candidateLimit = Math.max(config.maxPerCycle * 10, config.maxPerCycle + 10);
   const params = new URLSearchParams({
     'or': `(status.eq.pending,and(status.eq.processing,updated_at.lt.${cutoff}))`,
-    'order': 'created_at.asc',
+    // Prioritise new calls so today's sales calls get coached quickly even if
+    // there is a historical backlog from a previous outage.
+    'order': 'created_at.desc',
     'limit': String(candidateLimit),
     'select': 'id,call_id,transcript,rep_name,call_title,call_date,duration_seconds,status,created_at',
   });
