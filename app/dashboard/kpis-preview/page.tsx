@@ -1,18 +1,7 @@
 import { calculateBusinessPerformance, sumKpiRows } from '@/lib/kpis/business-performance';
+import { formatKpiCount, formatKpiCurrency, formatKpiMultiple, formatKpiPercent } from '@/lib/kpis/formatting';
 import { isKpiReadonlyPreviewEnabled, unconfirmedPhaseOneKpis } from '@/lib/kpis/field-map';
 import { sanitizedAdSpendSummary, sanitizedCloserRows, sanitizedSdrRows } from '@/lib/data/kpis/fixtures';
-
-function gbp(value: number): string {
-  return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 }).format(value);
-}
-
-function percent(value: number): string {
-  return `${value.toFixed(1)}%`;
-}
-
-function count(value: number): string {
-  return new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 }).format(value);
-}
 
 export default function KpisReadonlyPreviewPage() {
   const enabled = isKpiReadonlyPreviewEnabled();
@@ -51,21 +40,21 @@ export default function KpisReadonlyPreviewPage() {
       </section>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <Metric label="Closer First Call Cash" value={gbp(closerTotals.firstCallCash)} />
-        <Metric label="Closer Recovery Cash" value={gbp(closerTotals.recoveryCash)} />
-        <Metric label="Closer New Customers" value={count(closerTotals.newCustomers)} />
-        <Metric label="Closer Close Rate" value={percent(closerTotals.closeRate)} />
-        <Metric label="Closer Show Up Rate" value={percent(closerTotals.showUpRate)} />
-        <Metric label="Closer Refund Rate" value={percent(closerTotals.refundRate)} />
-        <Metric label="SDR First Call Cash" value={gbp(sdrTotals.firstCallCash)} />
-        <Metric label="SDR Recovery Cash" value={gbp(sdrTotals.recoveryCash)} />
-        <Metric label="SDR New Customers" value={count(sdrTotals.newCustomers)} />
-        <Metric label="BP Cash Collected" value={gbp(businessPerformance.cashCollected)} />
-        <Metric label="BP Recovered Cash" value={gbp(businessPerformance.recoveredCash)} />
-        <Metric label="BP CAC" value={gbp(businessPerformance.cac)} />
-        <Metric label="BP Blended CAC" value={gbp(businessPerformance.blendedCac)} />
-        <Metric label="BP ROAS" value={`${businessPerformance.roas.toFixed(2)}x`} />
-        <Metric label="BP ARPU" value={gbp(businessPerformance.arpu)} />
+        <Metric label="Closer First Call Cash" value={formatKpiCurrency(closerTotals.firstCallCash)} />
+        <Metric label="Closer Recovery Cash" value={formatKpiCurrency(closerTotals.recoveryCash)} />
+        <Metric label="Closer New Customers" value={formatKpiCount(closerTotals.newCustomers)} />
+        <Metric label="Closer Close Rate" value={formatKpiPercent(closerTotals.closeRate)} />
+        <Metric label="Closer Show Up Rate" value={formatKpiPercent(closerTotals.showUpRate)} />
+        <Metric label="Closer Refund Rate" value={formatKpiPercent(closerTotals.refundRate)} />
+        <Metric label="SDR First Call Cash" value={formatKpiCurrency(sdrTotals.firstCallCash)} />
+        <Metric label="SDR Recovery Cash" value={formatKpiCurrency(sdrTotals.recoveryCash)} />
+        <Metric label="SDR New Customers" value={formatKpiCount(sdrTotals.newCustomers)} />
+        <Metric label="BP Cash Collected" value={formatKpiCurrency(businessPerformance.cashCollected)} />
+        <Metric label="BP Recovered Cash" value={formatKpiCurrency(businessPerformance.recoveredCash)} />
+        <Metric label="BP CAC" value={formatKpiCurrency(businessPerformance.cac)} />
+        <Metric label="BP Blended CAC" value={formatKpiCurrency(businessPerformance.blendedCac)} />
+        <Metric label="BP ROAS" value={formatKpiMultiple(businessPerformance.roas)} />
+        <Metric label="BP ARPU" value={formatKpiCurrency(businessPerformance.arpu)} />
       </section>
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
