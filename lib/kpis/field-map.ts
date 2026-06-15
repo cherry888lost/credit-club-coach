@@ -33,3 +33,7 @@ export const unconfirmedPhaseOneKpis = [
 export function isKpiReadonlyPreviewEnabled(): boolean {
   return process.env.FEATURE_KPI_READONLY_MODULE === 'true';
 }
+
+export function isMergedKpiDashboardPreviewEnabled(): boolean {
+  return process.env.FEATURE_MERGED_KPI_DASHBOARD === 'true' || isKpiReadonlyPreviewEnabled();
+}
