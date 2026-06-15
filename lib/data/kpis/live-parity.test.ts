@@ -39,13 +39,24 @@ function toQueryParameters(params: Record<string, unknown> = {}): BigQueryQueryP
 }
 
 async function getAccessToken(): Promise<string> {
+  const envToken = process.env.KPI_BIGQUERY_ACCESS_TOKEN?.trim();
+  if (envToken) return envToken;
+
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFile);
-  const { stdout } = await execFileAsync('gcloud', ['auth', 'print-access-token']);
-  const token = stdout.trim();
-  if (!token) throw new Error('gcloud did not return an access token.');
-  return token;
+
+  try {
+    const { stdout } = await execFileAsync('gcloud', ['auth', 'print-access-token']);
+    const token = stdout.trim();
+    if (!token) throw new Error('gcloud did not return an access token.');
+    return token;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Live KPI parity requires read-only BigQuery credentials. Set KPI_BIGQUERY_ACCESS_TOKEN at runtime or install/authenticate gcloud. No credentials should be committed. Details: ${message}`,
+    );
+  }
 }
 
 async function runReadOnlyBigQuery(sql: string, params: Record<string, unknown> = {}): Promise<BigQueryRestRow[]> {
