@@ -73,7 +73,8 @@ describe('merged preview filters', () => {
   });
 
   it('does not silently mix unconfirmed team scope', () => {
-    const filters = normalizeMergedPreviewFilters({ team: 'Unassigned' });
+    const filters = normalizeMergedPreviewFilters({ team: 'Team A' });
+    expect(filters.team).toBe('Team A');
     expect(filterKpiRows(rows, filters)).toEqual([]);
   });
 

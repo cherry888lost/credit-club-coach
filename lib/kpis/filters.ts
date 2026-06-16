@@ -1,7 +1,7 @@
 import type { KpiFilters, KpiRole, KpiSummaryRow } from './types';
 
 export type KpiDashboardSection = 'overview' | 'sales' | 'kpis' | 'closers' | 'sdrs' | 'business-performance';
-export type KpiTeamScope = 'All' | 'Unassigned';
+export type KpiTeamScope = 'All' | string;
 
 export interface MergedPreviewFilters {
   startDate: string;
@@ -38,7 +38,7 @@ export function normalizeMergedPreviewFilters(
     startDate: validIsoDate(firstParam(searchParams.startDate), DEFAULT_START_DATE),
     endDate: validIsoDate(firstParam(searchParams.endDate), DEFAULT_END_DATE),
     role: validRoles.has(rawRole ?? '') ? (rawRole as MergedPreviewFilters['role']) : 'all',
-    team: rawTeam === 'Unassigned' ? 'Unassigned' : 'All',
+    team: rawTeam && rawTeam.trim() ? rawTeam.trim() : 'All',
     teamMember: rawTeamMember && rawTeamMember.trim() ? rawTeamMember.trim() : 'All',
     section: validSections.has(rawSection ?? '') ? (rawSection as KpiDashboardSection) : 'overview',
   };

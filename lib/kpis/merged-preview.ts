@@ -1,4 +1,5 @@
 import { sanitizedAdSpendSummary, sanitizedCloserRows, sanitizedSdrRows } from '../data/kpis/fixtures';
+import { getLaunchReadinessChecklist, getPhase2BBetaStatus, getUnsupportedFilterWarning, getUserAcceptanceChecklist, type Phase2BBetaStatus } from './beta-status';
 import { calculateBusinessPerformance, sumKpiRows } from './business-performance';
 import { filterKpiRows, getAvailableKpiMembers, type MergedPreviewFilters } from './filters';
 import { formatKpiCount, formatKpiCurrency, formatKpiMultiple, formatKpiPercent } from './formatting';
@@ -24,6 +25,10 @@ export interface MergedDashboardModel {
   sdrMetrics: DisplayMetric[];
   businessMetrics: DisplayMetric[];
   warnings: string[];
+  betaStatus: Phase2BBetaStatus;
+  unsupportedFilterWarning: string | null;
+  managerReviewChecklist: string[];
+  launchReadinessChecklist: string[];
 }
 
 interface BuildModelInput {
@@ -81,10 +86,16 @@ export function buildMergedDashboardModel({
   const sdrTotals = sumKpiRows(scopedSdrRows);
   const businessPerformance = calculateBusinessPerformance(scopedCloserRows, scopedSdrRows, adSpend);
 
+  const betaStatus = getPhase2BBetaStatus();
+  const unsupportedFilterWarning = getUnsupportedFilterWarning(filters);
   const warnings = [
-    'Read-only merged dashboard preview. Not approved for launch. Old KPI tracker remains source of truth.',
-    'SDR, Business Performance, refund/ad-spend, and historical role parity checks are still pending.',
+    betaStatus.banner,
+    'Remaining SDR, Business Performance, refund/ad-spend, and historical role parity checks are accepted for internal beta only and remain launch blockers.',
   ];
+
+  if (unsupportedFilterWarning) {
+    warnings.push(unsupportedFilterWarning);
+  }
 
   if (filters.team !== 'All') {
     warnings.push('Team mapping is not confirmed in Phase 2A; non-All team scope returns no KPI rows rather than mixing unknown memberships.');
@@ -112,5 +123,9 @@ export function buildMergedDashboardModel({
     sdrMetrics: buildKpiMetricCards(sdrTotals, 'gap'),
     businessMetrics: buildBusinessMetricCards(businessPerformance),
     warnings,
+    betaStatus,
+    unsupportedFilterWarning,
+    managerReviewChecklist: getUserAcceptanceChecklist(),
+    launchReadinessChecklist: getLaunchReadinessChecklist(),
   };
 }

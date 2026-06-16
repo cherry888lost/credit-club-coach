@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { AlertTriangle, BarChart3, Lock, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, BarChart3, CheckCircle2, ClipboardCheck, Lock, ShieldCheck } from 'lucide-react';
 import { isMergedKpiDashboardPreviewEnabled } from '@/lib/kpis/field-map';
 import { normalizeMergedPreviewFilters } from '@/lib/kpis/filters';
 import { buildMergedDashboardModel, type DisplayMetric } from '@/lib/kpis/merged-preview';
@@ -33,12 +33,11 @@ export default async function MergedDashboardPreviewPage({ searchParams }: Merge
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
-              <ShieldCheck className="h-4 w-4" /> Phase 2A controlled preview
+              <ShieldCheck className="h-4 w-4" /> Phase 2B internal beta
             </p>
-            <h1 className="mt-2 text-3xl font-bold">Merged Sales + KPI Dashboard Preview</h1>
+            <h1 className="mt-2 text-3xl font-bold">Merged Sales + KPI Dashboard Beta</h1>
             <p className="mt-3 max-w-4xl text-sm leading-6">
-              Read-only merged dashboard preview. Not approved for launch. Old KPI tracker remains source of truth. SDR,
-              Business Performance, refund/ad-spend, and historical role parity checks are still pending.
+              {model.betaStatus.banner}
             </p>
           </div>
           <div className="rounded-2xl bg-white/70 p-4 text-sm dark:bg-black/20">
@@ -64,7 +63,15 @@ export default async function MergedDashboardPreviewPage({ searchParams }: Merge
         ))}
       </section>
 
-      <DashboardSection title="Combined Overview" description="A preview-only home for sales tracker links and KPI status. Existing sales tracker logic remains on the original routes.">
+      <DashboardSection title="Beta status and parity risk" description="Managers can review this beta, but launch blockers remain visible and unchanged.">
+        <StatusGrid items={model.betaStatus.parityItems} />
+      </DashboardSection>
+
+      <DashboardSection title="Manager review notes" description="Read-only review checklist. This does not save notes or write to BigQuery/production data.">
+        <Checklist columns={[model.managerReviewChecklist, model.launchReadinessChecklist]} headings={['Internal beta review', 'Launch readiness blockers']} />
+      </DashboardSection>
+
+      <DashboardSection title="Combined Performance Summary" description="A preview-only home for sales tracker links and KPI status. Existing sales tracker logic remains on the original routes.">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {model.salesMetrics.map((metric) => (
             <MetricCard key={metric.label} metric={metric} />
@@ -121,6 +128,12 @@ function FilterSummary({ filters, availableMembers }: { filters: ReturnType<type
         <FilterPill label="Member" value={filters.teamMember} />
         <FilterPill label="Section" value={filters.section} />
       </div>
+      <div className="mt-4 flex flex-wrap gap-2 text-xs">
+        <PreviewLink href="/dashboard/merged-preview?role=all&team=All&teamMember=All&section=overview">All Members</PreviewLink>
+        <PreviewLink href="/dashboard/merged-preview?role=closer&team=All&teamMember=All&section=closers">Closer scope</PreviewLink>
+        <PreviewLink href="/dashboard/merged-preview?role=sdr&team=All&teamMember=All&section=sdrs">SDR scope</PreviewLink>
+        <PreviewLink href="/dashboard/merged-preview?team=Team%20A&teamMember=All&role=all&section=overview">Unsupported Team A warning</PreviewLink>
+      </div>
       <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
         Available sanitized preview members: {availableMembers.length > 0 ? availableMembers.join(', ') : 'none for this scope'}.
         Live BigQuery reads remain behind the read-only data layer and are not required for this sanitized preview render.
@@ -173,6 +186,41 @@ function MetricCard({ metric }: { metric: DisplayMetric }) {
       <p className="mt-2 text-2xl font-bold text-zinc-900 dark:text-white">{metric.value}</p>
       {metric.status && <p className="mt-2 text-xs uppercase tracking-wide text-zinc-500">{metric.status}</p>}
       {metric.note && <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{metric.note}</p>}
+    </div>
+  );
+}
+
+function StatusGrid({ items }: { items: { label: string; state: string; note: string }[] }) {
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {items.map((item) => (
+        <div key={item.label} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950">
+          <p className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-white">
+            <CheckCircle2 className="h-4 w-4" /> {item.label}
+          </p>
+          <p className="mt-2 text-xs uppercase tracking-wide text-zinc-500">{item.state}</p>
+          <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{item.note}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Checklist({ columns, headings }: { columns: string[][]; headings: string[] }) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {columns.map((items, index) => (
+        <div key={headings[index]} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950">
+          <p className="flex items-center gap-2 font-semibold text-zinc-900 dark:text-white">
+            <ClipboardCheck className="h-4 w-4" /> {headings[index]}
+          </p>
+          <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+            {items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
     </div>
   );
 }

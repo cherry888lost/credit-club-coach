@@ -6,8 +6,9 @@ describe('merged dashboard model', () => {
   it('builds a read-only preview model with gap warnings', () => {
     const model = buildMergedDashboardModel({ filters: normalizeMergedPreviewFilters({}) });
 
-    expect(model.warnings.join(' ')).toContain('Read-only merged dashboard preview');
+    expect(model.warnings.join(' ')).toContain('Internal merged dashboard beta');
     expect(model.warnings.join(' ')).toContain('SDR, Business Performance, refund/ad-spend');
+    expect(model.betaStatus.productionReady).toBe(false);
     expect(model.salesMetrics[0].value).toBe('Existing routes intact');
     expect(model.closerMetrics.some((metric) => metric.status === 'confirmed')).toBe(true);
     expect(model.sdrMetrics.every((metric) => metric.status === 'gap')).toBe(true);
