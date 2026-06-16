@@ -2,8 +2,9 @@ export type BetaStatusState =
   | 'verified'
   | 'mostly-verified'
   | 'partially-verified'
-  | 'not-fully-verified'
+  | 'pending'
   | 'not-migrated'
+  | 'not-approved'
   | 'read-only';
 
 export interface BetaStatusItem {
@@ -37,11 +38,12 @@ export function getPhase2BBetaStatus(): Phase2BBetaStatus {
     parityItems: [
       { label: 'Closer parity', state: 'mostly-verified', note: 'Closer A captured values matched after confirmed legacy display formatting.' },
       { label: 'Formatting parity', state: 'verified', note: 'Legacy Python f-string rounding replicated in lib/kpis/formatting.ts for tested values.' },
-      { label: 'SDR parity', state: 'not-fully-verified', note: 'Manual SDR dashboard parity capture remains incomplete.' },
-      { label: 'Business Performance parity', state: 'not-fully-verified', note: 'Business Performance manual capture/assertion tests remain incomplete.' },
-      { label: 'Refund/ad-spend parity', state: 'not-fully-verified', note: 'Refund, CAC, CPL, ROAS, and zero-ad-spend behavior still need final parity evidence.' },
-      { label: 'Historical role parity', state: 'not-fully-verified', note: 'Historical User A role/filter checks remain incomplete.' },
+      { label: 'SDR parity', state: 'pending', note: 'Manual SDR dashboard parity capture remains incomplete.' },
+      { label: 'Business Performance parity', state: 'pending', note: 'Business Performance manual capture/assertion tests remain incomplete.' },
+      { label: 'Refund/ad-spend parity', state: 'pending', note: 'Refund, CAC, CPL, ROAS, and zero-ad-spend behavior still need final parity evidence.' },
+      { label: 'Historical role parity', state: 'pending', note: 'Historical User A role/filter checks remain incomplete.' },
       { label: 'Admin/write workflows', state: 'not-migrated', note: 'No admin input migration or BigQuery write strategy has been approved.' },
+      { label: 'Production launch', state: 'not-approved', note: 'Internal beta review only; production launch and cutover require explicit future approval.' },
     ],
     guardrails: [
       'Feature flag FEATURE_MERGED_KPI_DASHBOARD must be true to view the beta route.',
