@@ -37,3 +37,7 @@ export function isKpiReadonlyPreviewEnabled(): boolean {
 export function isMergedKpiDashboardPreviewEnabled(): boolean {
   return process.env.FEATURE_MERGED_KPI_DASHBOARD === 'true' || isKpiReadonlyPreviewEnabled();
 }
+
+export function isKpiTrackerV2Enabled(): boolean {
+  return process.env.FEATURE_KPI_TRACKER_V2 === 'true';
+}
