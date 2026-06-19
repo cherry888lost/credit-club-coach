@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, prefer-const */
 /**
  * Credit Club Scoring Worker — THE ONE WORKER (v3.4)
  * 
@@ -12,6 +13,7 @@
 
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { buildRubricV2Prompt, buildRubricV2Result, mapRubricV2ToLegacy } from './rubric-v2';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -102,7 +104,7 @@ const VALID_QUALITY_LABELS = ['poor', 'average', 'strong', 'elite'] as const;
 const VALID_OUTCOMES = ['closed', 'no_sale', 'disqualified'] as const;
 const VALID_CLOSE_TYPES = ['full_close', 'payment_plan', 'deposit', 'partial_access'] as const;
 
-const MODEL_VERSION = 'worker-v3.4-pattern-extraction';
+const MODEL_VERSION = 'worker-v4.0-rubric-v2';
 const DEFAULT_ORG_ID = '00000000-0000-0000-0000-000000000001';
 const KB_ROOT = join(process.env.HOME || '/Users/papur', 'credit-club-kb');
 const BENCHMARK_ROOT = join(KB_ROOT, 'benchmarks');
@@ -508,8 +510,6 @@ function buildPrompt(
     return buildMinimalPrompt(transcript, repName);
   }
   
-  const agentCtx = repName ? `The sales agent's name is "${repName}".` : '';
-  
   // Load only 3 relevant benchmarks (pattern-extracted, ~4KB each)
   const likelyCloseType = benchmarkCloseType || detectLikelyCloseType(transcript);
   const relevantBenchmarks = loadBenchmarksForCloseType(likelyCloseType);
@@ -536,64 +536,10 @@ ${kb.pricing}`);
 
   const kbContent = kbSections.join('\n\n');
 
-  return `You are an expert sales call analyst and coach for Credit Club, a UK-focused credit, business-card, points-and-travel education programme. ${agentCtx}
-
-## Product Context — Credit Club
-
-Credit Club helps UK clients:
-- Improve/rebuild credit profiles and remove negative items
-- Get approved for American Express, business cards, and premium credit products
-- Master points, miles, Avios, hotel redemptions, business/first-class travel
-- Full implementation programme: Skool community + training + 1-on-1 Telegram support
-- Price: £3,000 standard | Deposits: £300-500 | Payment plans available
-
-## Close Types (FINAL OUTCOME DETERMINES THIS - NOT DISCUSSION)
-- full_close: Full £3,000 paid AND confirmed on the call
-- payment_plan: Installment arrangement AGREED and CONFIRMED
-- deposit: Partial payment (£300-500) TAKEN and CONFIRMED
-- partial_access: £500 upfront, £2,500 after card approval - AGREED and CONFIRMED
-- null: No close occurred
-
-================================================================================
-CRITICAL: OUTCOME DETERMINATION RULES
-================================================================================
-
-**OUTCOME MUST BE BASED ON FINAL RESULT ONLY**
-
-DETERMINE OUTCOME BY:
-1. Did the call end with clear confirmation of payment/commitment? → "closed"
-2. Was there explicit verbal agreement + clear next step for payment? → "closed"  
-3. Everything else → "no_sale"
-
-CLOSE_TYPE DETERMINATION (only when outcome="closed"):
-- full_close: Rep explicitly confirms "£3,000 paid" or "full payment received"
-- payment_plan: Explicit agreement to installment plan with amounts confirmed
-- deposit: Explicit confirmation deposit was taken (£300-500)
-- partial_access: Explicit agreement to £500 now, £2,500 after approval
-
-**ANTI-GUESSING RULE:**
-- If outcome is unclear → DEFAULT TO "no_sale"
-- Only mark "closed" if there is CLEAR verbal confirmation AND payment indication
-- Talking about options does NOT count as a close
-- Remove ALL "follow_up" outcomes - use "no_sale" instead
-
-================================================================================
-CRITICAL: COACHING LOGIC - FULL CLOSE PRIORITY
-================================================================================
-
-**IF full_close achieved:**
-→ NEVER penalize rep for not offering deposit/payment plan
-→ REWARD strong close
-→ Score 8-10 on overall_close_quality
-
-**IF no_sale (not closed):**
-→ THEN evaluate if deposit/payment plan/partial_access should have been offered
-→ Was there a missed opportunity to collect cash?
-→ Could the rep have tried a bridge close?
-
-GOAL: Maximize CASH collected, not options discussed.
-
-================================================================================
+  return buildRubricV2Prompt({
+    transcript,
+    repName,
+    benchmarkContext: `================================================================================
 WINNING BENCHMARK CALLS — PATTERN EXTRACTS (Key Moments Only)
 ================================================================================
 
@@ -602,106 +548,9 @@ Each extract shows ONLY the most important moments: key discovery questions, pai
 
 ### PRIMARY BENCHMARKS (${likelyCloseType.toUpperCase().replace('_', ' ')})
 
-${relevantBenchmarks}
-
-${kbContent}
-
-================================================================================
-YOUR TASK — BENCHMARK-BASED SCORING
-================================================================================
-
-Compare the transcript below against the winning benchmark extracts above.
-Score based on how closely the rep follows the proven winning patterns.
-
-## CRITICAL EVALUATION CRITERIA
-
-✓ **AMPLIFIED PAIN** — Did they deepen emotional impact like the benchmarks?
-✓ **ISOLATED OBJECTIONS** — Did they isolate before answering? (Benchmark pattern)
-✓ **USED VALUE STACKING** — Did they stack value before price? (Benchmark pattern)
-✓ **ATTEMPTED DEPOSIT/COMMITMENT CLOSE** — Did they ask for the sale like winners?
-✓ **CREATED URGENCY PROPERLY** — Was urgency based on real scarcity?
-✓ **HANDLED PRICING OBJECTIONS CORRECTLY** — Did they isolate→empathize→reframe→close?
-
-## PENALTY RULES — DEDUCT POINTS IF:
-
-❌ **NO CLOSE ATTEMPT** (-20 points) — UNLESS full_close was achieved
-❌ **FAILED TO AMPLIFY PAIN** (-15 points)
-❌ **GENERIC RAPPORT** (-10 points)
-❌ **FAILED TO ISOLATE OBJECTIONS** (-15 points)
-❌ **ALLOWED DELAY WITHOUT BRIDGE CLOSE** (-15 points) — UNLESS full_close achieved
-❌ **NO DEPOSIT ATTEMPT WHEN NO SALE** (-10 points) — Only penalize if outcome was "no_sale"
-
-## Scoring Rubric — 10 Categories (0–10 each)
-
-For each category, assign score 0–10, explain reasoning, and quote evidence.
-
-1. **rapport_tone** — Genuine rapport or robotic?
-2. **discovery_quality** — Probing questions to understand situation?
-3. **call_control** — Guided conversation or let prospect ramble?
-4. **pain_amplification** — Deepened emotional impact of credit problems?
-5. **offer_explanation** — Clear offer? Value stack used?
-6. **objection_handling** — Isolate→empathize→reframe→close?
-7. **urgency_close_attempt** — Created urgency? Asked for sale?
-8. **confidence_authority** — Sounded confident and knowledgeable?
-9. **next_steps_clarity** — Clear next steps with dates?
-10. **overall_close_quality** — Close attempted? Outcome achieved?
-
-## BENCHMARK COMPARISON SECTION (Required)
-
-After scoring, generate a benchmark_comparison section with:
-
-- **matched**: SPECIFIC things the rep did with EXACT QUOTES from both this call AND the benchmark. Format: "Rep said '[exact quote]' — this matched [Benchmark Name]'s approach of '[exact benchmark quote]'"
-- **missed**: SPECIFIC winning patterns the rep failed to use with EXACT QUOTES from benchmarks. Format: "When prospect said '[quote]', rep should have used [Benchmark Name]'s line: '[exact benchmark quote]'"
-- **what_to_say_instead**: EXACT scripts from benchmark calls. Format: "Instead of '[what rep said]', say what [Benchmark Name] said: '[exact quote]'"
-
-CRITICAL: Every benchmark reference MUST include an exact quote from that benchmark call. No generic references.
-
-## Output Format
-
-Return ONLY valid JSON (no markdown fences):
-
-{
-  "overall_score": 0-100,
-  "quality_label": "poor|average|strong|elite",
-  "outcome": "closed|no_sale|disqualified",
-  "close_type": null | "full_close|payment_plan|deposit|partial_access",
-  "outcome_confidence": "high|medium|low",
-  "coach_summary": {
-    "did_well": ["specific with evidence - reference benchmark calls by name"],
-    "needs_work": ["specific weakness with evidence - reference transcript quotes"],
-    "action_items": ["specific action referencing benchmark and exact script"]
-  },
-  "categories": {
-    "rapport_tone": { "score": 0-10, "reasoning": "...", "evidence": "..." },
-    ... (all 10 categories)
-  },
-  "strengths": ["specific - quote transcript"],
-  "weaknesses": ["specific - quote transcript"],
-  "objections_detected": ["MONEY: \"exact quote\"", "DELAY: \"exact quote\""],
-  "objections_handled_well": ["MONEY: handled by..."],
-  "objections_missed": ["AUTHORITY: missed opportunity to..."],
-  "next_coaching_actions": ["specific - reference benchmark"],
-  "coaching_markers": [],
-  "benchmark_comparison": {
-    "matched": ["Rep did X — this matched [Name]'s technique of..."],
-    "missed": ["Rep failed to Y — [Name] handled this by..."],
-    "what_to_say_instead": ["Instead of '...', say what [Name] said: '...'"]
-  }
-}
-
-IMPORTANT:
-- Return ONLY JSON
-- Be honest — most calls score 40-70
-- Use actual transcript quotes as evidence
-- Compare against the benchmark extracts
-- NO generic advice - only specific benchmark references
-- If outcome unclear, use "no_sale" with outcome_confidence: "low"
-- Never guess outcome - default to no_sale
-- If full_close achieved, never penalize for missing deposit/payment_plan
-
-## Transcript
-
-${transcript}`;
+${relevantBenchmarks}`,
+    knowledgeContext: kbContent,
+  });
 }
 
 // ── Rate limiting helper ─────────────────────────────────────────────────────
@@ -812,6 +661,17 @@ function validateAndParse(raw: string): ScoringResult {
     throw new Error(`Not valid JSON: ${cleaned.slice(0, 200)}...`);
   }
 
+  if (Array.isArray(parsed.category_scores) && parsed.deal_outcome) {
+    const rubricV2 = buildRubricV2Result(parsed, { analysisCoveragePercentage: 100 });
+    const legacy = mapRubricV2ToLegacy(rubricV2);
+    return {
+      ...legacy,
+      rubric_v2: rubricV2,
+      rubric_version: rubricV2.rubric_version,
+      benchmark_comparison: parsed.benchmark_comparison || { matched: [], missed: [], what_to_say_instead: [] },
+    } as ScoringResult;
+  }
+
   if (typeof parsed.overall_score !== 'number' || parsed.overall_score < 0 || parsed.overall_score > 100) {
     throw new Error(`Invalid overall_score: ${parsed.overall_score}`);
   }
@@ -918,6 +778,8 @@ async function writeScore(
     scoring_request_id: requestId,
     org_id: DEFAULT_ORG_ID,
     model_version: MODEL_VERSION,
+    rubric_version: (result as any).rubric_version || null,
+    rubric_v2: (result as any).rubric_v2 || null,
     rep_name: repName || 'Unknown',
     call_title: callTitle || 'Untitled',
     
@@ -957,6 +819,8 @@ async function writeScore(
     missed_opportunities: [...(result.objections_missed || []), ...(result.weaknesses || [])],
     
     coach_summary: result.coach_summary || { did_well: [], needs_work: [], action_items: [] },
+    enhanced_weaknesses: (result as any).enhanced_weaknesses || null,
+    objection_scripts: (result as any).objection_scripts || null,
     
     status: 'completed',
     created_at: new Date().toISOString(),
@@ -1103,6 +967,10 @@ async function processOne(
 }
 
 function combineChunkResults(chunks: any[]): any {
+  if (chunks.some(c => Array.isArray(c.category_scores) && c.deal_outcome)) {
+    return combineRubricV2ChunkResults(chunks);
+  }
+
   const scored = chunks.map(c => ({
     chunk: c,
     score: Object.keys(c.categories || {}).length + 
@@ -1138,6 +1006,60 @@ function combineChunkResults(chunks: any[]): any {
       missed: uniqueMissed,
       what_to_say_instead: uniqueWhatToSay,
     }
+  };
+}
+
+function combineRubricV2ChunkResults(chunks: any[]): any {
+  const v2Chunks = chunks.filter(c => Array.isArray(c.category_scores) && c.deal_outcome);
+  const best = v2Chunks[0] || chunks[0];
+  const categoryKeys = Array.from(new Set(v2Chunks.flatMap(c => c.category_scores.map((cat: any) => cat.category_key))));
+
+  const category_scores = categoryKeys.map((key) => {
+    const entries = v2Chunks
+      .flatMap(c => c.category_scores)
+      .filter((cat: any) => cat.category_key === key);
+    const bestEvidenceEntry = entries
+      .slice()
+      .sort((a: any, b: any) => ((b.evidence?.length || 0) - (a.evidence?.length || 0)))[0] || entries[0];
+    const avgScore = Math.round(entries.reduce((sum: number, cat: any) => sum + (Number(cat.score) || 1), 0) / Math.max(entries.length, 1));
+
+    return {
+      ...bestEvidenceEntry,
+      score: avgScore,
+      evidence: entries.flatMap((cat: any) => Array.isArray(cat.evidence) ? cat.evidence : []).slice(0, 4),
+      what_happened: entries.map((cat: any) => cat.what_happened).filter(Boolean).slice(0, 3).join(' | '),
+      why_this_score: entries.map((cat: any) => cat.why_this_score).filter(Boolean).slice(0, 3).join(' | '),
+      coaching_feedback: entries.map((cat: any) => cat.coaching_feedback).filter(Boolean).slice(0, 3).join(' | '),
+    };
+  });
+
+  const outcomePriority = ['payment_collected', 'deposit_collected', 'payment_plan_arranged', 'follow_up_booked', 'no_sale', 'unclear'];
+  const dealOutcome = v2Chunks
+    .map(c => c.deal_outcome)
+    .sort((a, b) => outcomePriority.indexOf(a.final_outcome) - outcomePriority.indexOf(b.final_outcome))[0] || best.deal_outcome;
+
+  return {
+    ...best,
+    deal_outcome: {
+      ...dealOutcome,
+      offer_pitched: v2Chunks.some(c => c.deal_outcome?.offer_pitched),
+      price_discussed: v2Chunks.some(c => c.deal_outcome?.price_discussed),
+      close_attempted: v2Chunks.some(c => c.deal_outcome?.close_attempted),
+      payment_collected: v2Chunks.some(c => c.deal_outcome?.payment_collected),
+      deposit_collected: v2Chunks.some(c => c.deal_outcome?.deposit_collected),
+      payment_plan_arranged: v2Chunks.some(c => c.deal_outcome?.payment_plan_arranged),
+      follow_up_booked: v2Chunks.some(c => c.deal_outcome?.follow_up_booked),
+      onboarding_or_next_step_completed: v2Chunks.some(c => c.deal_outcome?.onboarding_or_next_step_completed),
+      evidence: v2Chunks.flatMap(c => Array.isArray(c.deal_outcome?.evidence) ? c.deal_outcome.evidence : []).slice(0, 5),
+    },
+    category_scores,
+    best_moments: v2Chunks.flatMap(c => Array.isArray(c.best_moments) ? c.best_moments : []).slice(0, 5),
+    missed_opportunities: v2Chunks.flatMap(c => Array.isArray(c.missed_opportunities) ? c.missed_opportunities : []).slice(0, 5),
+    top_3_coaching_actions: v2Chunks.flatMap(c => Array.isArray(c.top_3_coaching_actions) ? c.top_3_coaching_actions : []).slice(0, 3),
+    compliance_flags: v2Chunks.flatMap(c => Array.isArray(c.compliance_flags) ? c.compliance_flags : []).slice(0, 5),
+    timestamped_key_moments: v2Chunks.flatMap(c => Array.isArray(c.timestamped_key_moments) ? c.timestamped_key_moments : []).slice(0, 10),
+    manager_summary: v2Chunks.map(c => c.manager_summary).filter(Boolean).slice(0, 3).join('\n\n'),
+    rep_facing_summary: v2Chunks.map(c => c.rep_facing_summary).filter(Boolean).slice(0, 3).join('\n\n'),
   };
 }
 
