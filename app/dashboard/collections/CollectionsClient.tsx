@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Download, FileJson, Plus, Search, Trash2 } from 'lucide-react';
 import type { CollectionRecord, CollectionStatus } from '@/lib/collections/types';
+import type { ViewAsContext } from '@/lib/dashboard/view-as';
 import { collectionBucket, computedCollectionStatus, daysUntil, formatGbp, outstandingBalance } from '@/lib/collections/format';
 
 type RepOption = { id: string; name: string; email?: string; role?: string; sales_role?: string | null };
@@ -31,7 +32,17 @@ const emptyForm: FormState = {
   sale_date: '', balance_due_date: '', next_follow_up_date: '', risk: 'Medium', status: 'Open', payment_link: '', notes: '',
 };
 
-export default function CollectionsClient({ initialCollections, reps, isAdmin }: { initialCollections: CollectionRecord[]; reps: RepOption[]; isAdmin: boolean }) {
+export default function CollectionsClient({
+  initialCollections,
+  reps,
+  isAdmin,
+  viewAsContext,
+}: {
+  initialCollections: CollectionRecord[];
+  reps: RepOption[];
+  isAdmin: boolean;
+  viewAsContext?: ViewAsContext;
+}) {
   const [collections, setCollections] = useState(initialCollections);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [query, setQuery] = useState('');
@@ -40,6 +51,9 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
   const [typeFilter, setTypeFilter] = useState('');
   const [ownerFilter, setOwnerFilter] = useState('');
   const [message, setMessage] = useState('');
+  const isViewingAs = Boolean(viewAsContext?.isViewingAs);
+  const canManageCollections = !isViewingAs;
+  const canUseAdminActions = isAdmin && !isViewingAs;
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -67,6 +81,7 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
   }
 
   function edit(record: CollectionRecord) {
+    if (isViewingAs) return setMessage('Exit view-as mode to make admin changes.');
     setForm({
       id: record.id,
       client_name: record.client_name || '',
@@ -88,6 +103,7 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
   }
 
   async function save() {
+    if (isViewingAs) return setMessage('Exit view-as mode to make admin changes.');
     setMessage('Saving...');
     const payload = {
       ...form,
@@ -111,6 +127,7 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
   }
 
   async function remove(id: string) {
+    if (isViewingAs) return setMessage('Exit view-as mode to make admin changes.');
     if (!confirm('Delete this collection record?')) return;
     const res = await fetch(`/api/collections/${id}`, { method: 'DELETE' });
     if (!res.ok) {
@@ -122,6 +139,7 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
   }
 
   async function markCollected(record: CollectionRecord) {
+    if (isViewingAs) return setMessage('Exit view-as mode to make admin changes.');
     const res = await fetch(`/api/collections/${record.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount_paid: record.total_sale_value || 0, status: 'Collected' }),
@@ -163,6 +181,9 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
   }
 
   return <div className="space-y-6">
+    {isViewingAs && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+      You are previewing the dashboard as {viewAsContext?.effectiveRepName}. Admin actions are disabled in preview mode. <a className="font-semibold underline" href="/dashboard/collections">Exit view-as mode to make admin changes.</a>
+    </div>}
     {message && <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">{message}</div>}
 
     <div className="grid gap-4 md:grid-cols-4">
@@ -172,10 +193,10 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
       <Metric label="Deposits collected" value={formatGbp(collected)} sub={`${visible.length} visible records`} success />
     </div>
 
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+    {canManageCollections ? <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div><h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Add or update collection</h2><p className="text-sm text-zinc-500">Deposits, balances, payment plans, partial access and failed payment follow-up.</p></div>
-        <div className="flex gap-2"><button onClick={() => setForm(emptyForm)} className="rounded-lg border px-3 py-2 text-sm">Clear form</button><button onClick={save} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"><Plus className="h-4 w-4" />Save collection</button></div>
+        <div className="flex gap-2"><button disabled={isViewingAs} onClick={() => setForm(emptyForm)} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-50">Clear form</button><button disabled={isViewingAs} onClick={save} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"><Plus className="h-4 w-4" />Save collection</button></div>
       </div>
       <div className="grid gap-3 md:grid-cols-4">
         <Input label="Client name" value={form.client_name} onChange={(v) => updateField('client_name', v)} />
@@ -188,18 +209,17 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
         <Input label="Sale date" value={form.sale_date} onChange={(v) => updateField('sale_date', v)} type="date" />
         <Input label="Balance due date" value={form.balance_due_date} onChange={(v) => updateField('balance_due_date', v)} type="date" />
         <Input label="Next follow-up date" value={form.next_follow_up_date} onChange={(v) => updateField('next_follow_up_date', v)} type="date" />
-        
         <Select label="Risk" value={form.risk} onChange={(v) => updateField('risk', v as FormState['risk'])} options={['Low','Medium','High'].map((x) => [x, x])} />
         <Select label="Status" value={form.status} onChange={(v) => updateField('status', v as CollectionStatus)} options={['Open','Due Soon','Overdue','Collected','Failed Payment','Refund Risk','Cancelled'].map((x) => [x, x])} />
         <div className="md:col-span-3"><Input label="Payment link" value={form.payment_link} onChange={(v) => updateField('payment_link', v)} /></div>
         <div className="md:col-span-4"><label className="mb-1 block text-xs font-semibold text-zinc-600 dark:text-zinc-300">Notes</label><textarea value={form.notes} onChange={(e) => updateField('notes', e.target.value)} className="min-h-20 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950" /></div>
       </div>
-    </section>
+    </section> : <section className="rounded-xl border border-zinc-200 bg-white p-5 text-sm text-zinc-600 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">Exit view-as mode to make admin changes.</section>}
 
     <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Collection pipeline</h2><p className="text-sm text-zinc-500">Server-filtered records for your role.</p></div>
-        {isAdmin && <div className="flex flex-wrap gap-2"><button onClick={exportBackup} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"><FileJson className="h-4 w-4" />Export backup</button><button onClick={exportCsv} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"><Download className="h-4 w-4" />Export CSV</button><label className="cursor-pointer rounded-lg border px-3 py-2 text-sm">Import backup<input type="file" accept="application/json" className="hidden" onChange={(e) => importBackup(e.target.files?.[0])} /></label><button onClick={clearAll} className="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm text-red-600"><Trash2 className="h-4 w-4" />Clear all</button></div>}
+        {canUseAdminActions && <div className="flex flex-wrap gap-2"><button onClick={exportBackup} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"><FileJson className="h-4 w-4" />Export backup</button><button onClick={exportCsv} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"><Download className="h-4 w-4" />Export CSV</button><label className="cursor-pointer rounded-lg border px-3 py-2 text-sm">Import backup<input type="file" accept="application/json" className="hidden" onChange={(e) => importBackup(e.target.files?.[0])} /></label><button onClick={clearAll} className="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm text-red-600"><Trash2 className="h-4 w-4" />Clear all</button></div>}
       </div>
 
       <div className="mb-4 grid gap-3 md:grid-cols-6">
@@ -207,10 +227,10 @@ export default function CollectionsClient({ initialCollections, reps, isAdmin }:
         <Filter value={typeFilter} onChange={setTypeFilter} options={[['deposit','Deposits / balances'],['plan','Payment plans'],['other','Other']]} placeholder="All types" />
         <Filter value={statusFilter} onChange={setStatusFilter} options={['Open','Due Soon','Overdue','Collected','Failed Payment','Refund Risk','Cancelled'].map((x) => [x, x])} placeholder="All statuses" />
         <Filter value={riskFilter} onChange={setRiskFilter} options={['Low','Medium','High'].map((x) => [x, x])} placeholder="All risks" />
-        {isAdmin && <Filter value={ownerFilter} onChange={setOwnerFilter} options={reps.map((r) => [r.id, r.name])} placeholder="All owners" />}
+        {canUseAdminActions && <Filter value={ownerFilter} onChange={setOwnerFilter} options={reps.map((r) => [r.id, r.name])} placeholder="All owners" />}
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800"><table className="min-w-[1200px] w-full text-left text-sm"><thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-950"><tr><th className="p-3">Client</th><th className="p-3">Owner</th><th className="p-3">Payment</th><th className="p-3">Paid</th><th className="p-3">Outstanding</th><th className="p-3">Due</th><th className="p-3">Follow up</th><th className="p-3">Status</th><th className="p-3">Risk</th><th className="p-3">Notes</th><th className="p-3">Actions</th></tr></thead><tbody>{visible.map((record) => <tr key={record.id} className="border-t border-zinc-100 dark:border-zinc-800"><td className="p-3 font-medium">{record.client_name}<div className="text-xs font-normal text-zinc-500">{record.telegram || record.phone_number || 'No contact'}</div></td><td className="p-3">{record.owner_name || 'Unassigned'}</td><td className="p-3">{record.collection_type}</td><td className="p-3 font-semibold">{formatGbp(record.amount_paid)}</td><td className="p-3 font-semibold">{formatGbp(outstandingBalance(record))}</td><td className="p-3">{record.balance_due_date || '—'}</td><td className="p-3">{record.next_follow_up_date || '—'}</td><td className="p-3"><StatusPill status={computedCollectionStatus(record)} /></td><td className="p-3">{record.risk}</td><td className="p-3 max-w-xs truncate">{record.notes}{record.payment_link && <a className="ml-2 text-indigo-600" href={record.payment_link} target="_blank">Link</a>}</td><td className="p-3"><div className="flex gap-2"><button onClick={() => edit(record)} className="rounded border px-2 py-1 text-xs">Edit</button><button onClick={() => markCollected(record)} className="rounded border px-2 py-1 text-xs">Collected</button><button onClick={() => remove(record.id)} className="rounded border border-red-200 px-2 py-1 text-xs text-red-600">Delete</button></div></td></tr>)}</tbody></table>{visible.length === 0 && <div className="p-6 text-sm text-zinc-500">No collections match your filters.</div>}</div>
+      <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800"><table className="min-w-[1200px] w-full text-left text-sm"><thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-950"><tr><th className="p-3">Client</th><th className="p-3">Owner</th><th className="p-3">Payment</th><th className="p-3">Paid</th><th className="p-3">Outstanding</th><th className="p-3">Due</th><th className="p-3">Follow up</th><th className="p-3">Status</th><th className="p-3">Risk</th><th className="p-3">Notes</th>{canManageCollections && <th className="p-3">Actions</th>}</tr></thead><tbody>{visible.map((record) => <tr key={record.id} className="border-t border-zinc-100 dark:border-zinc-800"><td className="p-3 font-medium">{record.client_name}<div className="text-xs font-normal text-zinc-500">{record.telegram || record.phone_number || 'No contact'}</div></td><td className="p-3">{record.owner_name || 'Unassigned'}</td><td className="p-3">{record.collection_type}</td><td className="p-3 font-semibold">{formatGbp(record.amount_paid)}</td><td className="p-3 font-semibold">{formatGbp(outstandingBalance(record))}</td><td className="p-3">{record.balance_due_date || '—'}</td><td className="p-3">{record.next_follow_up_date || '—'}</td><td className="p-3"><StatusPill status={computedCollectionStatus(record)} /></td><td className="p-3">{record.risk}</td><td className="p-3 max-w-xs truncate">{record.notes}{record.payment_link && <a className="ml-2 text-indigo-600" href={record.payment_link} target="_blank">Link</a>}</td>{canManageCollections && <td className="p-3"><div className="flex gap-2"><button onClick={() => edit(record)} className="rounded border px-2 py-1 text-xs">Edit</button><button onClick={() => markCollected(record)} className="rounded border px-2 py-1 text-xs">Collected</button><button onClick={() => remove(record.id)} className="rounded border border-red-200 px-2 py-1 text-xs text-red-600">Delete</button></div></td>}</tr>)}</tbody></table>{visible.length === 0 && <div className="p-6 text-sm text-zinc-500">No collections match your filters.</div>}</div>
     </section>
 
     <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">

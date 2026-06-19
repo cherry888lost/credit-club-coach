@@ -1,13 +1,21 @@
 import { NextResponse } from 'next/server';
 import { DEFAULT_ORG_ID, isAdmin, requireAuth, type CurrentUser } from '@/lib/auth';
 import { createServiceClient } from '@/lib/supabase/server';
-import { canAccessCollection, canAssignCollectionOwner, resolveCreateOwnerUserId } from './permissions';
+import type { ViewAsContext } from '@/lib/dashboard/view-as';
+import { canAccessCollection, canAssignCollectionOwner, canClearCollections, canExportCollections, canImportCollections, resolveCreateOwnerUserId } from './permissions';
 import type { CollectionInput, CollectionRecord, CollectionsUserContext } from './types';
 
 export type CollectionActionResult<T> = { data: T; status?: number } | { error: string; status: number };
 
-export function userToCollectionsContext(user: CurrentUser): CollectionsUserContext {
+export function userToCollectionsContext(user: CurrentUser, viewAsContext?: ViewAsContext): CollectionsUserContext {
   if (!user.rep) throw new Error('No active account');
+  if (viewAsContext) {
+    return {
+      repId: viewAsContext.collectionOwnerFilter || user.rep.id,
+      isAdmin: viewAsContext.isActualAdmin,
+      isViewingAs: viewAsContext.isViewingAs,
+    };
+  }
   return { repId: user.rep.id, isAdmin: isAdmin(user) };
 }
 
@@ -70,9 +78,9 @@ export async function listRepsForCollections() {
   return data || [];
 }
 
-export async function listCollections(): Promise<CollectionRecord[]> {
+export async function listCollections({ viewAsContext }: { viewAsContext?: ViewAsContext } = {}): Promise<CollectionRecord[]> {
   const user = await requireAuth();
-  const context = userToCollectionsContext(user);
+  const context = userToCollectionsContext(user, viewAsContext);
   const supabase = await createServiceClient();
   let query = supabase
     .from('collections')
@@ -80,7 +88,7 @@ export async function listCollections(): Promise<CollectionRecord[]> {
     .eq('org_id', DEFAULT_ORG_ID)
     .order('updated_at', { ascending: false });
 
-  if (!context.isAdmin) {
+  if (!context.isAdmin || context.isViewingAs) {
     query = query.eq('owner_user_id', context.repId);
   }
 
@@ -89,9 +97,9 @@ export async function listCollections(): Promise<CollectionRecord[]> {
   return (data || []) as CollectionRecord[];
 }
 
-export async function getCollectionById(id: string): Promise<CollectionActionResult<{ collection: CollectionRecord }>> {
+export async function getCollectionById(id: string, { viewAsContext }: { viewAsContext?: ViewAsContext } = {}): Promise<CollectionActionResult<{ collection: CollectionRecord }>> {
   const user = await requireAuth();
-  const context = userToCollectionsContext(user);
+  const context = userToCollectionsContext(user, viewAsContext);
   const supabase = await createServiceClient();
   const { data, error } = await supabase
     .from('collections')
@@ -214,15 +222,14 @@ export async function deleteCollection(id: string): Promise<CollectionActionResu
 export async function exportCollections(): Promise<CollectionActionResult<{ collections: CollectionRecord[] }>> {
   const user = await requireAuth();
   const context = userToCollectionsContext(user);
-  if (!context.isAdmin) return { error: 'Admin access required', status: 403 };
+  if (!canExportCollections(context)) return { error: 'Admin access required', status: 403 };
   return { data: { collections: await listCollections() } };
 }
 
 export async function clearCollections(confirmed: boolean): Promise<CollectionActionResult<{ success: true }>> {
   const user = await requireAuth();
   const context = userToCollectionsContext(user);
-  if (!context.isAdmin) return { error: 'Admin access required', status: 403 };
-  if (!confirmed) return { error: 'Confirmation required', status: 400 };
+  if (!canClearCollections(context, confirmed)) return { error: confirmed ? 'Admin access required' : 'Confirmation required', status: confirmed ? 403 : 400 };
   const supabase = await createServiceClient();
   const { error } = await supabase.from('collections').delete().eq('org_id', DEFAULT_ORG_ID);
   if (error) return { error: error.message, status: 500 };
@@ -232,7 +239,7 @@ export async function clearCollections(confirmed: boolean): Promise<CollectionAc
 export async function importCollections(records: CollectionInput[]): Promise<CollectionActionResult<{ imported: number }>> {
   const user = await requireAuth();
   const context = userToCollectionsContext(user);
-  if (!context.isAdmin) return { error: 'Admin access required', status: 403 };
+  if (!canImportCollections(context)) return { error: 'Admin access required', status: 403 };
   if (!Array.isArray(records)) return { error: 'Invalid import payload', status: 400 };
   const supabase = await createServiceClient();
   const ownerIds = records.map((record) => record.owner_user_id || null);

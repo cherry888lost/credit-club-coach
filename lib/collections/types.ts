@@ -31,6 +31,7 @@ export interface CollectionRecord {
 export interface CollectionsUserContext {
   repId: string;
   isAdmin: boolean;
+  isViewingAs?: boolean;
 }
 
 export interface CollectionOwnerAssignment {

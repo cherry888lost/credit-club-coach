@@ -1,12 +1,22 @@
 import { isAdmin, requireAuth } from '@/lib/auth';
 import { listCollections, listRepsForCollections } from '@/lib/collections/data';
+import { resolveViewAsContextFromRequest } from '@/lib/dashboard/view-as';
 import CollectionsClient from './CollectionsClient';
 
 export const dynamic = 'force-dynamic';
 
-export default async function CollectionsPage() {
+type CollectionsPageProps = {
+  searchParams: Promise<{ view_as?: string }>;
+};
+
+export default async function CollectionsPage({ searchParams }: CollectionsPageProps) {
   const user = await requireAuth();
-  const [collections, reps] = await Promise.all([listCollections(), listRepsForCollections()]);
+  const params = await searchParams;
+  const viewAsContext = await resolveViewAsContextFromRequest(params.view_as, user);
+  const [collections, reps] = await Promise.all([
+    listCollections({ viewAsContext }),
+    listRepsForCollections(),
+  ]);
   const admin = isAdmin(user);
 
   return (
@@ -18,7 +28,12 @@ export default async function CollectionsPage() {
         </p>
       </div>
       <div className="sr-only">Collection pipeline</div>
-      <CollectionsClient initialCollections={collections} reps={reps} isAdmin={admin} />
+      <CollectionsClient
+        initialCollections={collections}
+        reps={reps}
+        isAdmin={admin}
+        viewAsContext={viewAsContext}
+      />
     </div>
   );
 }

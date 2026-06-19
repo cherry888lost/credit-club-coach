@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { 
   LayoutDashboard, 
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useState, useCallback } from "react";
 import type { RepRole } from "@/types";
+import type { ViewAsOption } from "@/lib/dashboard/view-as";
 
 const navigation = [
   { name: "Overview", href: "/dashboard", icon: LayoutDashboard, adminOnly: false },
@@ -36,12 +37,30 @@ interface DashboardShellProps {
   orgName: string;
   userRole?: RepRole;
   isAdmin?: boolean;
+  viewAsOptions?: ViewAsOption[];
 }
 
-export default function DashboardShell({ children, orgName, userRole, isAdmin: isAdminUser }: DashboardShellProps) {
+function viewAsHref(pathname: string, params: URLSearchParams, value: string) {
+  const next = new URLSearchParams(params.toString());
+  if (value) next.set("view_as", value);
+  else next.delete("view_as");
+  const query = next.toString();
+  return `${pathname}${query ? `?${query}` : ""}`;
+}
+
+export default function DashboardShell({ children, orgName, userRole, isAdmin: isAdminUser, viewAsOptions = [] }: DashboardShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const selectedViewAs = searchParams.get("view_as") || "";
+  const selectedOption = viewAsOptions.find((option) => option.id === selectedViewAs);
+  const viewingLabel = selectedOption ? selectedOption.name : "Admin View";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+
+  function setViewAs(value: string) {
+    router.push(viewAsHref(pathname, searchParams, value));
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
@@ -108,7 +127,7 @@ export default function DashboardShell({ children, orgName, userRole, isAdmin: i
                     transition-all duration-150
                     ${isActive 
                       ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400" 
-                      : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-200"
+                      : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
                     }
                   `}
                   onClick={closeSidebar}
@@ -146,8 +165,8 @@ export default function DashboardShell({ children, orgName, userRole, isAdmin: i
       {/* Main content */}
       <div className="lg:pl-64 transition-[padding] duration-300">
         {/* Header */}
-        <header className="sticky top-0 z-30 h-16 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border-b border-zinc-200 dark:border-zinc-800">
-          <div className="flex h-full items-center justify-between px-4 sm:px-6 lg:px-8">
+        <header className="sticky top-0 z-30 min-h-16 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border-b border-zinc-200 dark:border-zinc-800">
+          <div className="flex min-h-16 flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
             <button
               className="lg:hidden p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
               onClick={() => setSidebarOpen(true)}
@@ -157,6 +176,32 @@ export default function DashboardShell({ children, orgName, userRole, isAdmin: i
             </button>
             
             <div className="flex items-center gap-4 ml-auto">
+              {isAdminUser && viewAsOptions.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm dark:border-indigo-900 dark:bg-indigo-950/40">
+                  <span className="font-medium text-indigo-900 dark:text-indigo-100">Viewing as:</span>
+                  <select
+                    aria-label="Viewing as"
+                    value={selectedViewAs}
+                    onChange={(event) => setViewAs(event.target.value)}
+                    className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-sm text-zinc-900 dark:border-indigo-800 dark:bg-zinc-950 dark:text-white"
+                  >
+                    <option value="">Admin View / All Records</option>
+                    {viewAsOptions.map((option) => (
+                      <option key={option.id} value={option.id}>{option.name}</option>
+                    ))}
+                  </select>
+                  {selectedViewAs && (
+                    <button
+                      type="button"
+                      onClick={() => setViewAs("")}
+                      className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-zinc-950 dark:text-indigo-200"
+                    >
+                      Exit view-as
+                    </button>
+                  )}
+                  <span className="text-xs text-indigo-700 dark:text-indigo-200">{viewingLabel}</span>
+                </div>
+              )}
               <span className="text-sm text-zinc-500 dark:text-zinc-400 hidden sm:block">
                 Credit Club Coach
               </span>
