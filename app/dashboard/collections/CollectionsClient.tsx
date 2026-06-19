@@ -182,7 +182,9 @@ export default function CollectionsClient({
 
   return <div className="space-y-6">
     {isViewingAs && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-      You are previewing the dashboard as {viewAsContext?.effectiveRepName}. Admin actions are disabled in preview mode. <a className="font-semibold underline" href="/dashboard/collections">Exit view-as mode to make admin changes.</a>
+      {viewAsContext?.viewAsError
+        ? `${viewAsContext.viewAsError}. Admin actions are disabled in preview mode.`
+        : `You are previewing the dashboard as ${viewAsContext?.effectiveRepName}. Admin actions are disabled in preview mode.`} <a className="font-semibold underline" href="/dashboard/collections">Exit view-as mode to make admin changes.</a>
     </div>}
     {message && <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">{message}</div>}
 
