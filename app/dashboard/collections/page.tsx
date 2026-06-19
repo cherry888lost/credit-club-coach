@@ -29,6 +29,7 @@ export default async function CollectionsPage({ searchParams }: CollectionsPageP
       </div>
       <div className="sr-only">Collection pipeline</div>
       <CollectionsClient
+        key={viewAsContext.requestedViewAsRepId || 'admin-view'}
         initialCollections={collections}
         reps={reps}
         isAdmin={admin}
