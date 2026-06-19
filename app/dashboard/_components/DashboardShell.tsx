@@ -13,7 +13,8 @@ import {
   X,
   Brain,
   Upload,
-  BookOpen
+  BookOpen,
+  WalletCards
 } from "lucide-react";
 import { useState, useCallback } from "react";
 import type { RepRole } from "@/types";
@@ -27,6 +28,7 @@ const navigation = [
   { name: "Pattern Library", href: "/dashboard/patterns", icon: BookOpen, adminOnly: true },
   { name: "Import Calls", href: "/dashboard/import-calls", icon: Upload, adminOnly: true },
   { name: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: false },
+  { name: "Collections", href: "/dashboard/collections", icon: WalletCards, adminOnly: false },
 ];
 
 interface DashboardShellProps {
