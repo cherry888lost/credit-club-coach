@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserWithRole } from "@/lib/auth";
+import { listDashboardViewAsOptions } from "@/lib/dashboard/view-as";
 import DashboardShell from "./_components/DashboardShell";
 
 export default async function DashboardLayout({
@@ -33,8 +34,10 @@ export default async function DashboardLayout({
     redirect("/unauthorized");
   }
 
+  const viewAsOptions = user.isAdminUser ? await listDashboardViewAsOptions(user) : [];
+
   return (
-    <DashboardShell orgName="Credit Club Team" userRole={user.rep.role} isAdmin={user.isAdminUser}>
+    <DashboardShell orgName="Credit Club Team" userRole={user.rep.role} isAdmin={user.isAdminUser} viewAsOptions={viewAsOptions}>
       {children}
     </DashboardShell>
   );

@@ -6,6 +6,9 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   try {
+    if (request.nextUrl.searchParams.get('view_as')) {
+      return Response.json({ error: 'Exit view-as mode to make admin changes' }, { status: 403 });
+    }
     const body = await request.json();
     return jsonResult(await importCollections(Array.isArray(body) ? body : body.collections));
   } catch (error) {

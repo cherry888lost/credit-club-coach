@@ -90,4 +90,13 @@ describe('collections permission model', () => {
     expect(canClearCollections(admin, true)).toBe(true);
     expect(canClearCollections(admin, false)).toBe(false);
   });
+
+  it('blocks admin write actions while previewing another user with view-as', () => {
+    const previewAdmin: CollectionsUserContext = { repId: 'admin-1', isAdmin: true, isViewingAs: true };
+
+    expect(canAssignCollectionOwner({ ownerUserId: 'closer-a' }, previewAdmin)).toBe(false);
+    expect(canExportCollections(previewAdmin)).toBe(false);
+    expect(canImportCollections(previewAdmin)).toBe(false);
+    expect(canClearCollections(previewAdmin, true)).toBe(false);
+  });
 });
