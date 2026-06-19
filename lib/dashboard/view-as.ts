@@ -56,13 +56,21 @@ export function resolveViewAsContext({
     return { ...base, viewAsError: 'View-as is only available to admins' };
   }
 
+  const invalidAdminView = (viewAsError: string): ViewAsContext => ({
+    ...base,
+    isViewingAs: true,
+    canUseAdminActions: false,
+    collectionOwnerFilter: '__invalid_view_as__',
+    viewAsError,
+  });
+
   const candidate = reps.find((rep) => rep.id === requested && rep.org_id === actualRep.org_id);
   if (!candidate) {
-    return { ...base, viewAsError: 'Requested view-as user was not found' };
+    return invalidAdminView('Requested view-as user was not found');
   }
 
   if (candidate.status !== 'active') {
-    return { ...base, viewAsError: 'Requested view-as user is not active' };
+    return invalidAdminView('Requested view-as user is not active');
   }
 
   return {

@@ -93,15 +93,18 @@ describe('resolveViewAsContext', () => {
     expect(context.viewAsError).toBe('View-as is only available to admins');
   });
 
-  it('does not honor inactive, missing, or cross-org requested reps', () => {
+  it('does not expose all admin data for inactive, missing, or cross-org requested reps', () => {
     const inactiveContext = resolveViewAsContext({ actualUser: user(adminRep), requestedViewAsRepId: 'inactive', reps: options });
     const missingContext = resolveViewAsContext({ actualUser: user(adminRep), requestedViewAsRepId: 'missing', reps: options });
     const crossOrgContext = resolveViewAsContext({ actualUser: user(adminRep), requestedViewAsRepId: 'other-org', reps: options });
 
-    expect(inactiveContext.isViewingAs).toBe(false);
-    expect(inactiveContext.collectionOwnerFilter).toBeNull();
+    expect(inactiveContext.isViewingAs).toBe(true);
+    expect(inactiveContext.collectionOwnerFilter).toBe('__invalid_view_as__');
+    expect(inactiveContext.canUseAdminActions).toBe(false);
     expect(inactiveContext.viewAsError).toBe('Requested view-as user is not active');
+    expect(missingContext.collectionOwnerFilter).toBe('__invalid_view_as__');
     expect(missingContext.viewAsError).toBe('Requested view-as user was not found');
+    expect(crossOrgContext.collectionOwnerFilter).toBe('__invalid_view_as__');
     expect(crossOrgContext.viewAsError).toBe('Requested view-as user was not found');
   });
 });
