@@ -29,6 +29,7 @@ describe('collections dashboard route and sidebar', () => {
     expect(pageSource).toContain('resolveViewAsContextFromRequest');
     expect(pageSource).toContain('viewAsContext');
     expect(pageSource).toContain('listCollections({ viewAsContext })');
+    expect(pageSource).toContain("key={viewAsContext.requestedViewAsRepId || 'admin-view'}");
     expect(apiSource).toContain("request.nextUrl.searchParams.get('view_as')");
   });
 
@@ -38,6 +39,11 @@ describe('collections dashboard route and sidebar', () => {
     expect(clientSource).toContain('Exit view-as mode to make admin changes');
     expect(clientSource).toContain('canManageCollections');
     expect(clientSource).toContain('disabled={isViewingAs}');
+  });
+
+  it('remounts CollectionsClient when view_as changes so stale admin records are not retained', () => {
+    expect(pageSource).toContain("key={viewAsContext.requestedViewAsRepId || 'admin-view'}");
+    expect(clientSource).toContain("useState(initialCollections)");
   });
 
   it('adds admin-only View As controls to the dashboard shell', () => {
