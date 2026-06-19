@@ -8,6 +8,7 @@ import {
   mapRubricV2ToLegacy,
   normalizeCategoryEvidence,
 } from './rubric-v2';
+import { buildAnalysisMetadata, buildScoreRowForTest, validateAndParseForTest } from './worker';
 
 const categoryScores = (overrides: Record<string, number> = {}): any[] =>
   CATEGORY_WEIGHTS_V2.map((category) => ({
@@ -301,5 +302,79 @@ describe('Credit Club scoring rubric v2', () => {
     expect(legacy.weaknesses[0]).toContain('Value gap');
     expect(legacy.rubric_v2).toEqual(result);
     expect(legacy.rubric_version).toBe('v2');
+  });
+
+  it('writes v2 analysis metadata into the call_scores row without dropping rubric or legacy fields', () => {
+    const metadata = buildAnalysisMetadata({
+      analyzedCharacterCount: 1200,
+      fullTranscriptCharacterCount: 1200,
+      chunksAnalyzed: 1,
+      totalChunks: 1,
+    });
+    const result = validateAndParseForTest(JSON.stringify(baseModelResult()), { analysisMetadata: metadata });
+    const row = buildScoreRowForTest({
+      callId: 'call-1',
+      requestId: 'request-1',
+      result,
+      repName: 'Callum',
+      callTitle: 'Test call',
+    });
+
+    expect(row.analysis_metadata).toEqual(metadata);
+    expect(row.rubric_version).toBe('v2');
+    expect(row.rubric_v2).toBeTruthy();
+    expect(row.rubric_v2.category_scores).toHaveLength(11);
+    expect(row.rubric_v2.score_calculation.method).toBe('deterministic_weighted_average');
+    expect(row.overall_score).toBe(row.rubric_v2.overall_score);
+    expect(row.score_total).toBe(row.rubric_v2.overall_score);
+    expect(row.quality_label).toBeTruthy();
+    expect(row.score_breakdown).toBeTruthy();
+    expect(row.categories.discovery_quality).toBeTruthy();
+    expect(row.strengths).toBeTruthy();
+    expect(row.weaknesses).toBeTruthy();
+    expect(Array.isArray(row.objection_scripts)).toBe(true);
+  });
+
+  it('preserves incomplete analysis metadata through v2 mapping instead of presenting it as complete', () => {
+    const metadata = buildAnalysisMetadata({
+      analyzedCharacterCount: 600,
+      fullTranscriptCharacterCount: 1200,
+      chunksAnalyzed: 1,
+      totalChunks: 2,
+    });
+    const result = validateAndParseForTest(JSON.stringify(baseModelResult()), { analysisMetadata: metadata });
+    const row = buildScoreRowForTest({ callId: 'call-1', requestId: 'request-1', result });
+
+    expect(metadata.analysis_status).toBe('incomplete');
+    expect(metadata.analysis_coverage_percentage).toBe(50);
+    expect(row.analysis_metadata.analysis_status).toBe('incomplete');
+    expect(row.rubric_v2.analysis_status).toBe('incomplete');
+    expect(row.rubric_v2.category_scores[0].evidence[0].quote).not.toBe('Not observed in the full analyzed transcript.');
+  });
+
+  it('keeps old non-v2 score rows compatible when analysis metadata is absent', () => {
+    const legacyResult: any = {
+      overall_score: 72,
+      quality_label: 'strong',
+      outcome: 'no_sale',
+      close_type: null,
+      coach_summary: { did_well: [], needs_work: [], action_items: [] },
+      categories: Object.fromEntries(['rapport_tone', 'discovery_quality', 'call_control', 'pain_amplification', 'offer_explanation', 'objection_handling', 'urgency_close_attempt', 'confidence_authority', 'next_steps_clarity', 'overall_close_quality'].map((key) => [key, { score: 7, reasoning: 'ok', evidence: 'evidence' }])),
+      strengths: [],
+      weaknesses: [],
+      objections_detected: [],
+      objections_handled_well: [],
+      objections_missed: [],
+      next_coaching_actions: [],
+      coaching_markers: [],
+    };
+
+    const row = buildScoreRowForTest({ callId: 'call-1', requestId: 'request-1', result: legacyResult });
+
+    expect(row.rubric_version).toBeNull();
+    expect(row.rubric_v2).toBeNull();
+    expect(row.analysis_metadata).toBeNull();
+    expect(row.overall_score).toBe(72);
+    expect(row.categories.discovery_quality).toBeTruthy();
   });
 });

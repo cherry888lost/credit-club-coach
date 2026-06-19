@@ -47,6 +47,15 @@ interface BenchmarkComparison {
   what_to_say_instead: string[];
 }
 
+interface AnalysisMetadata {
+  analysis_status: 'complete' | 'incomplete';
+  analysis_coverage_percentage: number;
+  analyzed_character_count: number;
+  full_transcript_character_count: number;
+  chunks_analyzed: number;
+  total_chunks: number;
+}
+
 interface ScoringResult {
   overall_score: number;
   quality_label: 'poor' | 'average' | 'strong' | 'elite';
@@ -62,6 +71,7 @@ interface ScoringResult {
   next_coaching_actions: string[];
   coaching_markers: any[];
   benchmark_comparison?: BenchmarkComparison;
+  analysis_metadata?: AnalysisMetadata | null;
 }
 
 interface WorkerConfig {
@@ -227,10 +237,15 @@ async function pollPending(config: WorkerConfig): Promise<ScoringRequest[]> {
 
 async function claimRequest(config: WorkerConfig, requestId: string): Promise<boolean> {
   try {
+    const cutoff = new Date(Date.now() - config.processingTimeoutMinutes * 60_000).toISOString();
+    const filters = new URLSearchParams({
+      id: `eq.${requestId}`,
+      or: `(status.eq.pending,and(status.eq.processing,updated_at.lt.${cutoff}))`,
+    }).toString();
     const rows = await supabaseUpdate(
       config,
       'scoring_requests',
-      `id=eq.${requestId}&status=in.(pending,processing)`,
+      filters,
       { status: 'processing', started_at: new Date().toISOString(), updated_at: new Date().toISOString() },
     );
     return rows.length > 0;
@@ -559,6 +574,32 @@ async function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+export function buildAnalysisMetadata(params: {
+  analyzedCharacterCount: number;
+  fullTranscriptCharacterCount: number;
+  chunksAnalyzed: number;
+  totalChunks: number;
+}): AnalysisMetadata {
+  const fullTranscriptCharacterCount = Math.max(0, Math.floor(params.fullTranscriptCharacterCount));
+  const analyzedCharacterCount = Math.max(0, Math.min(Math.floor(params.analyzedCharacterCount), fullTranscriptCharacterCount));
+  const totalChunks = Math.max(1, Math.floor(params.totalChunks));
+  const chunksAnalyzed = Math.max(0, Math.min(Math.floor(params.chunksAnalyzed), totalChunks));
+  const complete = fullTranscriptCharacterCount > 0
+    && analyzedCharacterCount === fullTranscriptCharacterCount
+    && chunksAnalyzed === totalChunks;
+
+  return {
+    analysis_status: complete ? 'complete' : 'incomplete',
+    analysis_coverage_percentage: fullTranscriptCharacterCount === 0
+      ? 0
+      : Math.round((analyzedCharacterCount / fullTranscriptCharacterCount) * 100),
+    analyzed_character_count: analyzedCharacterCount,
+    full_transcript_character_count: fullTranscriptCharacterCount,
+    chunks_analyzed: chunksAnalyzed,
+    total_chunks: totalChunks,
+  };
+}
+
 // ── Step 4: Call Cherry reasoning agent ──────────────────────────────────────
 
 async function callCherryAgent(
@@ -648,7 +689,7 @@ ${raw.slice(0, 24000)}`;
 
 // ── Step 5: Validate scoring output ──────────────────────────────────────────
 
-function validateAndParse(raw: string): ScoringResult {
+function validateAndParse(raw: string, options: { analysisMetadata?: AnalysisMetadata | null } = {}): ScoringResult {
   let cleaned = raw.trim();
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
@@ -662,13 +703,18 @@ function validateAndParse(raw: string): ScoringResult {
   }
 
   if (Array.isArray(parsed.category_scores) && parsed.deal_outcome) {
-    const rubricV2 = buildRubricV2Result(parsed, { analysisCoveragePercentage: 100 });
+    const analysisMetadata = options.analysisMetadata || null;
+    if (analysisMetadata) {
+      parsed.analysis_status = analysisMetadata.analysis_status;
+    }
+    const rubricV2 = buildRubricV2Result(parsed, { analysisCoveragePercentage: analysisMetadata?.analysis_coverage_percentage ?? 100 });
     const legacy = mapRubricV2ToLegacy(rubricV2);
     return {
       ...legacy,
       rubric_v2: rubricV2,
       rubric_version: rubricV2.rubric_version,
       benchmark_comparison: parsed.benchmark_comparison || { matched: [], missed: [], what_to_say_instead: [] },
+      analysis_metadata: analysisMetadata,
     } as ScoringResult;
   }
 
@@ -739,19 +785,25 @@ function validateAndParse(raw: string): ScoringResult {
     if (!Array.isArray(parsed.benchmark_comparison.what_to_say_instead)) parsed.benchmark_comparison.what_to_say_instead = [];
   }
 
+  parsed.analysis_metadata = options.analysisMetadata || null;
+
   return parsed as ScoringResult;
+}
+
+export function validateAndParseForTest(raw: string, options: { analysisMetadata?: AnalysisMetadata | null } = {}): ScoringResult {
+  return validateAndParse(raw, options);
 }
 
 // ── Step 6: Write score to call_scores ───────────────────────────────────────
 
-async function writeScore(
-  config: WorkerConfig,
-  callId: string,
-  requestId: string,
-  result: ScoringResult,
-  repName?: string | null,
-  callTitle?: string | null,
-): Promise<string> {
+export function buildScoreRowForTest(params: {
+  callId: string;
+  requestId: string;
+  result: ScoringResult;
+  repName?: string | null;
+  callTitle?: string | null;
+}): Record<string, any> {
+  const { callId, requestId, result, repName, callTitle } = params;
   const grade = result.overall_score >= 90 ? 'A+' : result.overall_score >= 80 ? 'A' : result.overall_score >= 70 ? 'B' : result.overall_score >= 60 ? 'C' : result.overall_score >= 50 ? 'D' : 'F';
   
   const catScore = (name: string) => (result.categories as any)?.[name]?.score || 0;
@@ -821,10 +873,23 @@ async function writeScore(
     coach_summary: result.coach_summary || { did_well: [], needs_work: [], action_items: [] },
     enhanced_weaknesses: (result as any).enhanced_weaknesses || null,
     objection_scripts: (result as any).objection_scripts || null,
+    analysis_metadata: result.analysis_metadata || null,
     
     status: 'completed',
     created_at: new Date().toISOString(),
   };
+  return row;
+}
+
+async function writeScore(
+  config: WorkerConfig,
+  callId: string,
+  requestId: string,
+  result: ScoringResult,
+  repName?: string | null,
+  callTitle?: string | null,
+): Promise<string> {
+  const row = buildScoreRowForTest({ callId, requestId, result, repName, callTitle });
 
   const inserted = await supabaseInsert(config, 'call_scores', row);
 
@@ -906,12 +971,19 @@ async function processOne(
       raw = await callOpenAIDirect(config, prompt);
     }
 
+    const analysisMetadata = buildAnalysisMetadata({
+      analyzedCharacterCount: chunks[0].length,
+      fullTranscriptCharacterCount: request.transcript.length,
+      chunksAnalyzed: 1,
+      totalChunks: 1,
+    });
+
     let result: ScoringResult;
     try {
-      result = validateAndParse(raw);
+      result = validateAndParse(raw, { analysisMetadata });
     } catch (e: any) {
       raw = await repairScoringJson(config, raw, e?.message || String(e));
-      result = validateAndParse(raw);
+      result = validateAndParse(raw, { analysisMetadata });
     }
     const scoreId = await writeScore(config, request.call_id, request.id, result, request.rep_name, request.call_title);
 
@@ -921,6 +993,7 @@ async function processOne(
   console.log(`[WORKER] Multi-chunk processing: ${chunks.length} chunks`);
   
   const chunkResults: any[] = [];
+  let analyzedCharacterCount = 0;
   for (let i = 0; i < chunks.length; i++) {
     if (i > 0) {
       console.log(`[WORKER] Rate limit delay: 15000ms before chunk ${i + 1}`);
@@ -949,6 +1022,7 @@ async function processOne(
     try {
       const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '').trim());
       chunkResults.push(parsed);
+      analyzedCharacterCount += chunks[i].length;
     } catch {
       console.warn(`[WORKER] Chunk ${i + 1} parse failed, skipping`);
     }
@@ -959,7 +1033,13 @@ async function processOne(
   }
 
   const combined = combineChunkResults(chunkResults);
-  const result = validateAndParse(JSON.stringify(combined));
+  const analysisMetadata = buildAnalysisMetadata({
+    analyzedCharacterCount,
+    fullTranscriptCharacterCount: request.transcript.length,
+    chunksAnalyzed: chunkResults.length,
+    totalChunks: chunks.length,
+  });
+  const result = validateAndParse(JSON.stringify(combined), { analysisMetadata });
   
   const scoreId = await writeScore(config, request.call_id, request.id, result, request.rep_name, request.call_title);
 

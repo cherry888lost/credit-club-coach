@@ -13,9 +13,10 @@ echo "✅ Adding new silent scoring cron..."
 openclaw cron add \
   --name "scoring-worker-v2" \
   --every "2m" \
-  --exec "node /Users/papur/.openclaw/bin/scoring-worker-v2.js" \
+  --message "Run exactly this shell command and return only errors: cd /Users/papur/credit-club-coach && npm run worker:once -- --max 1 --fail-on-error. Do not run bulk scoring. Do not process more than one request." \
   --no-deliver \
-  --description "Silent background scoring worker. No output on success. Alerts on failure only."
+  --timeout-seconds 180 \
+  --description "Background scoring worker via checked-in TypeScript source and npm worker:once; max one request per cycle. No missing ~/.openclaw worker file."
 
 echo ""
 echo "📋 Current cron jobs:"
