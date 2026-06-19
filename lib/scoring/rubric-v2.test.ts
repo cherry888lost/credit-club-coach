@@ -8,7 +8,7 @@ import {
   mapRubricV2ToLegacy,
   normalizeCategoryEvidence,
 } from './rubric-v2';
-import { buildAnalysisMetadata, buildScoreRowForTest, validateAndParseForTest } from './worker';
+import { buildAnalysisMetadata, buildClaimFiltersForTest, buildScoreRowForTest, validateAndParseForTest } from './worker';
 
 const categoryScores = (overrides: Record<string, number> = {}): any[] =>
   CATEGORY_WEIGHTS_V2.map((category) => ({
@@ -350,6 +350,15 @@ describe('Credit Club scoring rubric v2', () => {
     expect(row.analysis_metadata.analysis_status).toBe('incomplete');
     expect(row.rubric_v2.analysis_status).toBe('incomplete');
     expect(row.rubric_v2.category_scores[0].evidence[0].quote).not.toBe('Not observed in the full analyzed transcript.');
+  });
+
+  it('only claims pending or stale processing requests, never actively-processing requests', () => {
+    const filters = decodeURIComponent(buildClaimFiltersForTest('request-1', 15, new Date('2026-06-19T22:00:00.000Z')));
+
+    expect(filters).toContain('id=eq.request-1');
+    expect(filters).toContain('status.eq.pending');
+    expect(filters).toContain('and(status.eq.processing,updated_at.lt.2026-06-19T21:45:00.000Z)');
+    expect(filters).not.toContain('status.eq.processing)');
   });
 
   it('keeps old non-v2 score rows compatible when analysis metadata is absent', () => {

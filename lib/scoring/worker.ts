@@ -235,13 +235,17 @@ async function pollPending(config: WorkerConfig): Promise<ScoringRequest[]> {
 
 // ── Step 2: Atomic claim ─────────────────────────────────────────────────────
 
+export function buildClaimFiltersForTest(requestId: string, processingTimeoutMinutes: number, now = new Date()): string {
+  const cutoff = new Date(now.getTime() - processingTimeoutMinutes * 60_000).toISOString();
+  return new URLSearchParams({
+    id: `eq.${requestId}`,
+    or: `(status.eq.pending,and(status.eq.processing,updated_at.lt.${cutoff}))`,
+  }).toString();
+}
+
 async function claimRequest(config: WorkerConfig, requestId: string): Promise<boolean> {
   try {
-    const cutoff = new Date(Date.now() - config.processingTimeoutMinutes * 60_000).toISOString();
-    const filters = new URLSearchParams({
-      id: `eq.${requestId}`,
-      or: `(status.eq.pending,and(status.eq.processing,updated_at.lt.${cutoff}))`,
-    }).toString();
+    const filters = buildClaimFiltersForTest(requestId, config.processingTimeoutMinutes);
     const rows = await supabaseUpdate(
       config,
       'scoring_requests',
