@@ -5,6 +5,7 @@ export type OutcomeConfidence = 'high' | 'medium' | 'low';
 export type DealFinalOutcome =
   | 'payment_collected'
   | 'deposit_collected'
+  | 'partial_access'
   | 'payment_plan_arranged'
   | 'follow_up_booked'
   | 'no_sale'
@@ -108,6 +109,7 @@ export interface RubricV2Result {
 
 export interface RubricV2BuildOptions {
   analysisCoveragePercentage?: number | null;
+  transcript?: string | null;
 }
 
 const BENCHMARK_SOURCE_NAMES = [
@@ -254,10 +256,12 @@ export function calculateWeightedScore(
 
 export function buildRubricV2Result(raw: any, options: RubricV2BuildOptions = {}): RubricV2Result {
   const complianceFlags = normalizeComplianceFlags(raw?.compliance_flags);
-  const calculated = calculateWeightedScore(raw?.category_scores || [], complianceFlags, options);
-  const sanitizedMissedOpportunities = sanitizeMomentAdviceArray(raw?.missed_opportunities);
+  const dealOutcome = normalizeDealOutcome(raw?.deal_outcome, options.transcript);
+  const correctedCategoryInputs = applyOutcomeCategoryCorrections(raw?.category_scores || [], dealOutcome);
+  const calculated = calculateWeightedScore(correctedCategoryInputs, complianceFlags, options);
+  const sanitizedMissedOpportunities = sanitizeMomentAdviceArray(filterContradictoryCloseAdvice(raw?.missed_opportunities, dealOutcome));
   const sanitizedCoachingActions = sanitizeAdviceValue(
-    Array.isArray(raw?.top_3_coaching_actions) ? raw.top_3_coaching_actions.slice(0, 3) : []
+    filterContradictoryCloseAdvice(Array.isArray(raw?.top_3_coaching_actions) ? raw.top_3_coaching_actions.slice(0, 3) : [], dealOutcome)
   );
 
   return {
@@ -265,14 +269,14 @@ export function buildRubricV2Result(raw: any, options: RubricV2BuildOptions = {}
     analysis_status: raw?.analysis_status === 'partial' || raw?.analysis_status === 'incomplete' ? raw.analysis_status : 'complete',
     overall_score: calculated.overallScore,
     score_calculation: calculated.scoreCalculation,
-    deal_outcome: normalizeDealOutcome(raw?.deal_outcome),
+    deal_outcome: dealOutcome,
     category_scores: calculated.categoryScores,
     best_moments: sanitizeMomentAdviceArray(raw?.best_moments),
     missed_opportunities: sanitizedMissedOpportunities,
     top_3_coaching_actions: sanitizedCoachingActions,
     compliance_flags: complianceFlags,
-    manager_summary: sanitizeAdviceValue(typeof raw?.manager_summary === 'string' ? raw.manager_summary : ''),
-    rep_facing_summary: sanitizeAdviceValue(typeof raw?.rep_facing_summary === 'string' ? raw.rep_facing_summary : ''),
+    manager_summary: sanitizeSummaryForOutcome(raw?.manager_summary, dealOutcome),
+    rep_facing_summary: sanitizeSummaryForOutcome(raw?.rep_facing_summary, dealOutcome),
     timestamped_key_moments: sanitizeMomentAdviceArray(raw?.timestamped_key_moments),
   };
 }
@@ -304,29 +308,45 @@ function getComplianceScoreCap(flags: ComplianceFlag[]): { cap: number | null; r
   return { cap: null, reason: null };
 }
 
-function normalizeDealOutcome(outcome: any): RubricV2DealOutcome {
-  const finalOutcome: DealFinalOutcome = isDealFinalOutcome(outcome?.final_outcome) ? outcome.final_outcome : inferFinalOutcome(outcome);
-
-  return {
-    final_outcome: finalOutcome,
+function normalizeDealOutcome(outcome: any, transcript?: string | null): RubricV2DealOutcome {
+  const transcriptOutcome = detectDealOutcomeFromTranscript(transcript || '');
+  const modelOutcome: RubricV2DealOutcome = {
+    final_outcome: isDealFinalOutcome(outcome?.final_outcome) ? outcome.final_outcome : inferFinalOutcome(outcome),
     outcome_confidence: outcome?.outcome_confidence === 'high' || outcome?.outcome_confidence === 'medium' || outcome?.outcome_confidence === 'low'
       ? outcome.outcome_confidence
       : 'low',
     offer_pitched: Boolean(outcome?.offer_pitched),
     price_discussed: Boolean(outcome?.price_discussed),
     close_attempted: Boolean(outcome?.close_attempted),
-    payment_collected: Boolean(outcome?.payment_collected) || finalOutcome === 'payment_collected',
-    deposit_collected: Boolean(outcome?.deposit_collected) || finalOutcome === 'deposit_collected',
-    payment_plan_arranged: Boolean(outcome?.payment_plan_arranged) || finalOutcome === 'payment_plan_arranged',
-    follow_up_booked: Boolean(outcome?.follow_up_booked) || finalOutcome === 'follow_up_booked',
+    payment_collected: Boolean(outcome?.payment_collected),
+    deposit_collected: Boolean(outcome?.deposit_collected),
+    payment_plan_arranged: Boolean(outcome?.payment_plan_arranged),
+    follow_up_booked: Boolean(outcome?.follow_up_booked),
     onboarding_or_next_step_completed: Boolean(outcome?.onboarding_or_next_step_completed),
     evidence: normalizeOutcomeEvidence(outcome?.evidence),
+  };
+
+  const finalOutcome = strongestOutcome(modelOutcome.final_outcome, transcriptOutcome.final_outcome);
+
+  return {
+    final_outcome: finalOutcome,
+    outcome_confidence: transcriptOutcome.outcome_confidence === 'high' || modelOutcome.outcome_confidence === 'high' ? 'high' : modelOutcome.outcome_confidence,
+    offer_pitched: modelOutcome.offer_pitched || transcriptOutcome.offer_pitched,
+    price_discussed: modelOutcome.price_discussed || transcriptOutcome.price_discussed,
+    close_attempted: modelOutcome.close_attempted || transcriptOutcome.close_attempted || isClosedOutcome(finalOutcome),
+    payment_collected: modelOutcome.payment_collected || transcriptOutcome.payment_collected || finalOutcome === 'payment_collected',
+    deposit_collected: modelOutcome.deposit_collected || transcriptOutcome.deposit_collected || finalOutcome === 'deposit_collected' || finalOutcome === 'partial_access',
+    payment_plan_arranged: modelOutcome.payment_plan_arranged || transcriptOutcome.payment_plan_arranged || finalOutcome === 'payment_plan_arranged',
+    follow_up_booked: modelOutcome.follow_up_booked || transcriptOutcome.follow_up_booked || finalOutcome === 'follow_up_booked',
+    onboarding_or_next_step_completed: modelOutcome.onboarding_or_next_step_completed || transcriptOutcome.onboarding_or_next_step_completed,
+    evidence: sanitizeOutcomeEvidenceForOutcome([...transcriptOutcome.evidence, ...modelOutcome.evidence], finalOutcome).slice(0, 8),
   };
 }
 
 function isDealFinalOutcome(value: unknown): value is DealFinalOutcome {
   return value === 'payment_collected'
     || value === 'deposit_collected'
+    || value === 'partial_access'
     || value === 'payment_plan_arranged'
     || value === 'follow_up_booked'
     || value === 'no_sale'
@@ -335,10 +355,188 @@ function isDealFinalOutcome(value: unknown): value is DealFinalOutcome {
 
 function inferFinalOutcome(outcome: any): DealFinalOutcome {
   if (outcome?.payment_collected) return 'payment_collected';
+  if (outcome?.partial_access) return 'partial_access';
   if (outcome?.deposit_collected) return 'deposit_collected';
   if (outcome?.payment_plan_arranged) return 'payment_plan_arranged';
   if (outcome?.follow_up_booked) return 'follow_up_booked';
   return 'unclear';
+}
+
+function detectDealOutcomeFromTranscript(transcript: string): RubricV2DealOutcome {
+  const text = transcript || '';
+  const lower = text.toLowerCase();
+  const evidence: DealOutcomeEvidence[] = [];
+  const addEvidence = (pattern: RegExp, why: string) => {
+    const match = pattern.exec(text);
+    if (!match) return;
+    evidence.push({ timestamp: timestampBefore(text, match.index), speaker: null, quote: compactQuote(text, match.index), why_it_matters: why });
+  };
+
+  const partialAccess = /partial\s+access/i.test(text);
+  const pricing = /£\s?(?:300|500|2,?000|2,?500|3,?000|3,?500|4,?000)|\b(?:300|500|2000|2500|3000|3500|4000)\s+pounds?\b/i.test(text);
+  const paymentLink = /payment\s+link|making\s+the\s+payment|payment\s+(?:went|gone|come)\s+through|just\s+come\s+through|tick\s+it\s+off|card\s+payment|transfer|invoice/i.test(text);
+  const commitment = /okay,?\s+let'?s\s+do\s+that|let'?s\s+do\s+it|we\s+can\s+get\s+you\s+started|start\s+with\s+£?\s?(?:300|500|2000)|secure\s+your\s+place|hold\s+your\s+spot/i.test(text);
+  const onboarding = /onboard|onboarding|support\s+chat|joined\s+us|member|database|e-?sig|set\s+up\s+your\s+.*(?:account|group|chat)|get\s+the\s+ball\s+rolling/i.test(text);
+  const paymentPlan = /remainder|balance\s+later|rest\s+later|payment\s+plan|next\s+payment|instalment|installment/i.test(text);
+
+  addEvidence(/partial\s+access[^\n.]*|What the partial access is[^\n.]*/i, 'The offer included partial access.');
+  addEvidence(/pay\s+us\s+£?\s?500|£?\s?500[^\n.]*partial access/i, 'The partial access price/deposit was discussed.');
+  addEvidence(/Okay,?\s+let'?s\s+do\s+that[^\n.]*/i, 'The prospect agreed to the partial access offer.');
+  addEvidence(/payment\s+link[^\n.]*|making\s+the\s+payment[^\n.]*|just\s+come\s+through[^\n.]*/i, 'Payment/commitment evidence was present.');
+  addEvidence(/joined\s+us\s+on\s+a\s+partial\s+access[^\n.]*/i, 'The rep confirmed the prospect joined on partial access.');
+
+  const finalOutcome: DealFinalOutcome = partialAccess && (paymentLink || commitment)
+    ? 'partial_access'
+    : paymentLink
+      ? 'deposit_collected'
+      : paymentPlan && commitment
+        ? 'payment_plan_arranged'
+        : commitment
+          ? 'follow_up_booked'
+          : 'unclear';
+
+  return {
+    final_outcome: finalOutcome,
+    outcome_confidence: finalOutcome === 'unclear' ? 'low' : 'high',
+    offer_pitched: partialAccess || /offer|pricing|lifetime access|normally charge/i.test(text),
+    price_discussed: pricing,
+    close_attempted: commitment || paymentLink || partialAccess,
+    payment_collected: /payment\s+(?:went|gone|come)\s+through|just\s+come\s+through/i.test(text),
+    deposit_collected: paymentLink || (partialAccess && pricing && commitment),
+    payment_plan_arranged: paymentPlan,
+    follow_up_booked: /book|call|telegram|support\s+chat|onboard|onboarding/i.test(lower) && (commitment || paymentLink),
+    onboarding_or_next_step_completed: onboarding,
+    evidence,
+  };
+}
+
+function strongestOutcome(a: DealFinalOutcome, b: DealFinalOutcome): DealFinalOutcome {
+  const priority: DealFinalOutcome[] = ['payment_collected', 'partial_access', 'deposit_collected', 'payment_plan_arranged', 'follow_up_booked', 'no_sale', 'unclear'];
+  return priority.indexOf(b) < priority.indexOf(a) ? b : a;
+}
+
+function isClosedOutcome(outcome: DealFinalOutcome): boolean {
+  return outcome === 'payment_collected' || outcome === 'deposit_collected' || outcome === 'partial_access' || outcome === 'payment_plan_arranged';
+}
+
+function compactQuote(text: string, index: number): string {
+  const start = Math.max(0, text.lastIndexOf('\n', index - 1));
+  const end = text.indexOf('\n', index + 1);
+  return text.slice(start, end === -1 ? Math.min(text.length, index + 320) : end).replace(/\s+/g, ' ').trim().slice(0, 500);
+}
+
+function timestampBefore(text: string, index: number): string | null {
+  const before = text.slice(Math.max(0, index - 500), index);
+  const matches = [...before.matchAll(/(\d{1,2}:\d{2})\s+-/g)];
+  return matches.length ? matches[matches.length - 1][1] : null;
+}
+
+function sanitizeOutcomeEvidenceForOutcome(evidence: DealOutcomeEvidence[], finalOutcome: DealFinalOutcome): DealOutcomeEvidence[] {
+  if (!isClosedOutcome(finalOutcome)) return evidence;
+  return evidence
+    .map((item) => ({
+      ...item,
+      why_it_matters: removeContradictoryCloseLanguage(item.why_it_matters) || 'Outcome evidence from the transcript.',
+    }))
+    .filter((item) => !/no close attempt|no evidence of payment|no offer or price discussed/i.test(item.quote || ''));
+}
+
+function applyOutcomeCategoryCorrections(categories: unknown[], outcome: RubricV2DealOutcome): RubricV2CategoryInput[] {
+  if (!Array.isArray(categories)) return [];
+  if (!isClosedOutcome(outcome.final_outcome)) return categories as RubricV2CategoryInput[];
+
+  return categories.map((category: any) => {
+    if (!category || typeof category !== 'object') return category;
+    if (category.category_key === 'closing_skill') {
+      return rewriteOutcomeAwareCategory(category, 6, 'The rep did make a close attempt and secured a commitment; score the cleanliness and control of the close, not whether a close happened.');
+    }
+    if (category.category_key === 'payment_commitment_next_steps') {
+      return rewriteOutcomeAwareCategory(category, outcome.final_outcome === 'partial_access' ? 7 : 6, 'Payment, deposit, partial access, or a clear commitment was observed; score how clearly the payment and next step were confirmed.');
+    }
+    if ((category.category_key === 'pitch_offer_clarity' || category.category_key === 'solution_explanation') && (outcome.offer_pitched || outcome.price_discussed)) {
+      return rewriteOutcomeAwareCategory(category, 5, 'The offer and pricing were discussed; score how clearly the value, terms, and next steps were explained.');
+    }
+    return category;
+  }) as RubricV2CategoryInput[];
+}
+
+function rewriteOutcomeAwareCategory(category: any, minScore: number, replacementReason: string): any {
+  return {
+    ...category,
+    score: Math.max(clampCategoryScore(category.score), minScore),
+    why_this_score: outcomeAwareReplacement(category.why_this_score, replacementReason),
+    what_happened: outcomeAwareReplacement(category.what_happened, replacementReason),
+    coaching_feedback: outcomeAwareReplacement(category.coaching_feedback, 'Coach the rep to make the close cleaner, confirm payment status, and state the next step explicitly.'),
+  };
+}
+
+function sanitizeSummaryForOutcome(value: unknown, outcome: RubricV2DealOutcome): string {
+  const text = sanitizeAdviceValue(typeof value === 'string' ? value : '');
+  if (!isClosedOutcome(outcome.final_outcome)) return text;
+  const cleaned = text
+    .split(/(?<=[.!?])\s+/)
+    .map(removeContradictoryCloseLanguage)
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned;
+}
+
+function filterContradictoryCloseAdvice(values: unknown, outcome: RubricV2DealOutcome): any[] {
+  const items = Array.isArray(values) ? values : [];
+  if (!isClosedOutcome(outcome.final_outcome)) return items;
+  return items
+    .map((item) => {
+      if (typeof item === 'string') return removeContradictoryCloseLanguage(item);
+      if (!item || typeof item !== 'object') return item;
+      return Object.fromEntries(Object.entries(item as Record<string, unknown>).map(([key, value]) => [
+        key,
+        typeof value === 'string' ? removeContradictoryCloseLanguage(value) : value,
+      ]));
+    })
+    .filter((item) => JSON.stringify(item).replace(/[{}\[\]",:]/g, '').trim().length > 0);
+}
+
+function outcomeAwareReplacement(value: unknown, fallback: string): string {
+  const cleaned = removeContradictoryCloseLanguage(value)
+    .split('|')
+    .map((part) => part.replace(/^[\s.]+|[\s.]+$/g, '').trim())
+    .filter((part) => part.length > 8)
+    .filter((part) => !/^(to evaluate|yet|present)$/i.test(part))
+    .filter((part) => !/not yet discussed|has not yet explained|no .* observed|not present/i.test(part))
+    .join(' | ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || fallback;
+}
+
+function removeContradictoryCloseLanguage(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const cleaned = value
+    .replace(/\bno closing skill observed\b/gi, '')
+    .replace(/\bno ask for sale or decision point presented(?: yet)?\b/gi, '')
+    .replace(/\bno evidence of payment or follow-up scheduling\b/gi, '')
+    .replace(/\bno evidence of payment or next step setting\b/gi, '')
+    .replace(/\bno evidence of payment or commitment activity\b/gi, '')
+    .replace(/\bno pitch or offer clarity observed\b/gi, '')
+    .replace(/\boffer and pric(?:e|ing) (?:was |were )?not (?:yet )?discussed(?: or clarified)?(?: yet)?\b/gi, '')
+    .replace(/\bno offer or pric(?:e|ing) (?:was )?discussed(?: yet)?\b/gi, '')
+    .replace(/\bthe rep has not yet explained the solution or how it connects to the prospect'?s situation\b/gi, '')
+    .replace(/\bno close attempt(?: made)?\b/gi, '')
+    .replace(/\bclosing not attempted(?: yet)?\b/gi, '')
+    .replace(/\bno closing behavior (?:present|observed)\b/gi, '')
+    .replace(/\bno closing skill demonstrated(?: yet)?\b/gi, '')
+    .replace(/\bno payment or commitment (?:observed|behavior present|activity observed)\b/gi, '')
+    .replace(/\bclosing skill was not demonstrated in the analyzed transcript\b/gi, '')
+    .replace(/\bpitch and offer clarity was not present in the analyzed transcript\b/gi, '')
+    .replace(/\b(?:offer|pricing?|payment|commitment|closing|close)\s+(?:was|were)\s+not\s+(?:observed|present|demonstrated)(?:\s+in\s+the\s+analyzed\s+transcript)?\b/gi, '')
+    .replace(/\bno clear close\b/gi, '')
+    .replace(/\bask for the close\b/gi, 'confirm the close and next step')
+    .replace(/\bask clearly for payment\b/gi, 'confirm payment and next step clearly')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned === '.' ? '' : cleaned;
 }
 
 function normalizeOutcomeEvidence(evidence: unknown): DealOutcomeEvidence[] {
@@ -449,13 +647,14 @@ export function mapRubricV2ToLegacy(result: RubricV2Result): any {
 }
 
 function mapOutcome(finalOutcome: DealFinalOutcome): 'closed' | 'no_sale' | 'disqualified' {
-  return finalOutcome === 'payment_collected' || finalOutcome === 'deposit_collected' || finalOutcome === 'payment_plan_arranged'
+  return finalOutcome === 'payment_collected' || finalOutcome === 'deposit_collected' || finalOutcome === 'partial_access' || finalOutcome === 'payment_plan_arranged'
     ? 'closed'
     : 'no_sale';
 }
 
 function mapCloseType(finalOutcome: DealFinalOutcome): 'full_close' | 'payment_plan' | 'deposit' | 'partial_access' | null {
   if (finalOutcome === 'payment_collected') return 'full_close';
+  if (finalOutcome === 'partial_access') return 'partial_access';
   if (finalOutcome === 'deposit_collected') return 'deposit';
   if (finalOutcome === 'payment_plan_arranged') return 'payment_plan';
   return null;
@@ -531,8 +730,11 @@ K. Communication and call control: confidence, tonality, listening, personalizat
 
 DEAL OUTCOME DETECTION:
 Return a separate deal_outcome object with booleans for offer_pitched, price_discussed, close_attempted, payment_collected, deposit_collected, payment_plan_arranged, follow_up_booked, onboarding_or_next_step_completed.
-final_outcome must be one of: payment_collected, deposit_collected, payment_plan_arranged, follow_up_booked, no_sale, unclear.
-Only mark payment/deposit/plan as true with clear transcript evidence. If unclear, use final_outcome="unclear" and outcome_confidence="low".
+final_outcome must be one of: payment_collected, deposit_collected, partial_access, payment_plan_arranged, follow_up_booked, no_sale, unclear.
+Only mark payment/deposit/plan/partial access as true with clear transcript evidence. If unclear, use final_outcome="unclear" and outcome_confidence="low".
+- A partial access close, deposit, payment link, payment confirmation, or agreed staged payment is a real close/commitment. Do not describe it as "no close attempt" or "no payment/commitment observed".
+- Partial access means the prospect starts with a smaller payment/deposit for limited access or an initial audit/approval step, with the balance later.
+- Recognize close/payment language including: partial access, deposit taken, payment link, payment went through, we can start you with £X, £500 now and remainder later, secure your place, hold your spot, onboarding, support chat, balance later, payment plan, card payment, transfer, invoice.
 
 COMPLIANCE FLAGS:
 Flag clear evidence of guaranteed approval, guaranteed score increase, unrealistic timeline promises, misleading claims, or inappropriate pressure tactics. Include safer wording. High severity flags require exact evidence.
@@ -552,7 +754,7 @@ Return ONLY valid JSON matching this shape:
 {
   "analysis_status": "complete|partial|incomplete",
   "deal_outcome": {
-    "final_outcome": "payment_collected|deposit_collected|payment_plan_arranged|follow_up_booked|no_sale|unclear",
+    "final_outcome": "payment_collected|deposit_collected|partial_access|payment_plan_arranged|follow_up_booked|no_sale|unclear",
     "outcome_confidence": "high|medium|low",
     "offer_pitched": false,
     "price_discussed": false,

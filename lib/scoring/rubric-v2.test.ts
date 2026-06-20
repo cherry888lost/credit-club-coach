@@ -196,6 +196,85 @@ describe('Credit Club scoring rubric v2', () => {
     expect(result.deal_outcome.evidence[0].timestamp).toBe('59:40');
   });
 
+  it('detects partial access/deposit/payment phrases as a close commitment from the transcript', () => {
+    const raw = baseModelResult({
+      closing_skill: 3,
+      payment_commitment_next_steps: 3,
+      pitch_offer_clarity: 4,
+    });
+    raw.deal_outcome = {
+      ...raw.deal_outcome,
+      final_outcome: 'no_sale',
+      offer_pitched: false,
+      price_discussed: false,
+      close_attempted: false,
+      deposit_collected: false,
+      evidence: [],
+    };
+    raw.category_scores = categoryScores({
+      closing_skill: 3,
+      payment_commitment_next_steps: 3,
+      pitch_offer_clarity: 4,
+    }).map((category) => {
+      if (category.category_key === 'closing_skill') {
+        return { ...category, why_this_score: 'Closing not attempted yet.', coaching_feedback: 'Ask clearly for payment.' };
+      }
+      if (category.category_key === 'payment_commitment_next_steps') {
+        return { ...category, why_this_score: 'No payment or commitment observed.', coaching_feedback: 'Secure a deposit.' };
+      }
+      if (category.category_key === 'pitch_offer_clarity') {
+        return { ...category, why_this_score: 'Offer and price not discussed yet.' };
+      }
+      return category;
+    });
+    raw.missed_opportunities = [{ issue: 'No close attempt made', coaching_feedback: 'Ask for the close.' }];
+    raw.top_3_coaching_actions = [{ action: 'Close the customer before ending the call.' }];
+
+    const transcript = `
+      Rep: So I'll tell you pricing, we normally charge £4,000, but today it is £3,000.
+      Rep: We have this thing called partial access. What the partial access is, is you pay us £500.
+      Prospect: Okay, let's do that one then.
+      Rep: I sent you the payment link, bro, for the 500.
+      Prospect: Yes, it's open, I'm just making the payment now.
+      Rep: I think that was you that just come through as well, perfect, I can tick it off.
+      Rep: He's just joined us on a partial access, let's get the ball rolling.
+    `;
+
+    const result = buildRubricV2Result(raw, { analysisCoveragePercentage: 100, transcript });
+    const legacy = mapRubricV2ToLegacy(result);
+    const allFeedback = JSON.stringify(result).toLowerCase();
+
+    expect(result.deal_outcome.final_outcome).toBe('partial_access');
+    expect(result.deal_outcome.offer_pitched).toBe(true);
+    expect(result.deal_outcome.price_discussed).toBe(true);
+    expect(result.deal_outcome.close_attempted).toBe(true);
+    expect(result.deal_outcome.deposit_collected).toBe(true);
+    expect(result.deal_outcome.onboarding_or_next_step_completed).toBe(true);
+    expect(result.category_scores.find((c) => c.category_key === 'closing_skill')?.score).toBeGreaterThanOrEqual(6);
+    expect(result.category_scores.find((c) => c.category_key === 'payment_commitment_next_steps')?.score).toBeGreaterThanOrEqual(7);
+    expect(legacy.outcome).toBe('closed');
+    expect(legacy.close_type).toBe('partial_access');
+    expect(allFeedback).not.toContain('no close attempt');
+    expect(allFeedback).not.toContain('no closing skill observed');
+    expect(allFeedback).not.toContain('no evidence of payment');
+    expect(allFeedback).not.toContain('no payment or commitment observed');
+    expect(allFeedback).not.toContain('no payment or commitment activity observed');
+    expect(allFeedback).not.toContain('closing skill was not demonstrated');
+    expect(allFeedback).not.toContain('pitch and offer clarity was not present');
+  });
+
+  it('does not regress no-sale calls into closed outcomes without close evidence', () => {
+    const raw = baseModelResult({ closing_skill: 2, payment_commitment_next_steps: 2 });
+    const result = buildRubricV2Result(raw, {
+      analysisCoveragePercentage: 100,
+      transcript: 'Prospect: I am not interested right now. Rep: No problem, thanks for your time.',
+    });
+
+    expect(result.deal_outcome.final_outcome).not.toBe('partial_access');
+    expect(result.deal_outcome.close_attempted).toBe(false);
+    expect(mapRubricV2ToLegacy(result).outcome).toBe('no_sale');
+  });
+
   it('distinguishes follow-up booked from payment collected', () => {
     const raw = baseModelResult({ payment_commitment_next_steps: 7 });
     raw.deal_outcome = {

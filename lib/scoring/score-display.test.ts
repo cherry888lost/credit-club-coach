@@ -141,11 +141,13 @@ describe('score page display model', () => {
     expect(JSON.stringify(model.compactScoreBreakdown)).not.toContain('V2 quote');
   });
 
-  it('limits quick verdict to three sentences', () => {
+  it('limits quick verdict to six useful sentences and keeps key moments out of the simple view', () => {
     const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
 
-    expect(model.quickVerdict).toBe('This was an average call. The rep built rapport but no clear next step was secured. This extra sentence should be removed.');
-    expect(model.quickVerdict.split('.').filter(Boolean)).toHaveLength(3);
+    expect(model.quickVerdict).toBe('Deposit Collected. This was an average call. The rep built rapport but no clear next step was secured. This extra sentence should be removed. This fourth sentence should also be removed. The main improvement is to make the next call more structured and easier for the prospect to commit to.');
+    expect(model.quickVerdict.split('.').filter(Boolean)).toHaveLength(6);
+    expect(model.showKeyMomentsInSimpleView).toBe(false);
+    expect(model.adminDiagnostics?.keyMomentsAvailable).toBeUndefined();
   });
 
   it('summarizes wins instead of showing long raw transcript chunks', () => {
@@ -217,6 +219,32 @@ describe('score page display model', () => {
     expect((allCloserText.match(/clear next step|firm next step|secure a date/g) || []).length).toBeLessThanOrEqual(1);
   });
 
+  it('explains manager and AI outcome differences clearly, and collapses matching partial access outcomes', () => {
+    const matching = buildScoreDisplayModel(baseScore({
+      manual_outcome: 'closed',
+      manual_close_type: 'partial_access',
+      close_type: 'partial_access',
+      rubric_v2: {
+        ...baseScore().rubric_v2,
+        deal_outcome: { final_outcome: 'partial_access', outcome_confidence: 'high' },
+      },
+    }), { isAdmin: false });
+    expect(matching.outcome.primaryLabel).toBe('Partial Access Closed');
+    expect(matching.outcome.secondaryLabel).toBeNull();
+
+    const different = buildScoreDisplayModel(baseScore({
+      manual_outcome: 'closed',
+      manual_close_type: 'partial_access',
+      close_type: null,
+      rubric_v2: {
+        ...baseScore().rubric_v2,
+        deal_outcome: { final_outcome: 'no_sale', outcome_confidence: 'medium' },
+      },
+    }), { isAdmin: false });
+    expect(different.outcome.primaryLabel).toBe('Manager Outcome: Partial Access Closed');
+    expect(different.outcome.secondaryLabel).toBe('AI Detected Outcome: No Sale');
+  });
+
   it('hides empty scripts, null timestamps, and Full transcript labels from rep-facing display', () => {
     const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
     const serialized = JSON.stringify(model);
@@ -241,7 +269,7 @@ describe('score page display model', () => {
     const model = buildScoreDisplayModel(baseScore({ manual_outcome: 'no_sale', close_type: 'full_close' }), { isAdmin: false });
 
     expect(model.outcome.primaryLabel).toBe('Manager Outcome: No Sale');
-    expect(model.outcome.secondaryLabel).toBe('AI Outcome: Deposit Collected');
+    expect(model.outcome.secondaryLabel).toBe('AI Detected Outcome: Deposit Collected');
     expect(model.outcome.badges).not.toEqual(expect.arrayContaining(['Full Close', 'No Sale']));
   });
 });

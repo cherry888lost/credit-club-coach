@@ -578,24 +578,6 @@ export default async function CallDetailPage({ params }: { params: { id: string 
               </div>
             )}
 
-            {displayModel.keyMoments.length > 0 && (
-              <div>
-                <h4 className="flex items-center gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-                  <Clock className="w-4 h-4" /> Key call moments
-                </h4>
-                <ul className="space-y-2">
-                  {displayModel.keyMoments.map((moment, i) => (
-                    <li key={i} className="text-sm text-zinc-700 dark:text-zinc-300 bg-white/70 dark:bg-zinc-900/50 rounded-lg p-3 border border-indigo-100 dark:border-indigo-900/50">
-                      <div className="font-medium">
-                        {moment.timestamp ? <span className="text-indigo-600 dark:text-indigo-400 mr-2">{moment.timestamp}</span> : null}
-                        {moment.label}
-                      </div>
-                      {moment.note ? <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{moment.note}</p> : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </div>
         </div>
       )}

@@ -694,7 +694,7 @@ ${raw.slice(0, 24000)}`;
 
 // ── Step 5: Validate scoring output ──────────────────────────────────────────
 
-function validateAndParse(raw: string, options: { analysisMetadata?: AnalysisMetadata | null } = {}): ScoringResult {
+function validateAndParse(raw: string, options: { analysisMetadata?: AnalysisMetadata | null; transcript?: string | null } = {}): ScoringResult {
   let cleaned = raw.trim();
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
@@ -712,7 +712,7 @@ function validateAndParse(raw: string, options: { analysisMetadata?: AnalysisMet
     if (analysisMetadata) {
       parsed.analysis_status = analysisMetadata.analysis_status;
     }
-    const rubricV2 = buildRubricV2Result(parsed, { analysisCoveragePercentage: analysisMetadata?.analysis_coverage_percentage ?? 100 });
+    const rubricV2 = buildRubricV2Result(parsed, { analysisCoveragePercentage: analysisMetadata?.analysis_coverage_percentage ?? 100, transcript: options.transcript });
     const legacy = mapRubricV2ToLegacy(rubricV2);
     return {
       ...legacy,
@@ -795,7 +795,7 @@ function validateAndParse(raw: string, options: { analysisMetadata?: AnalysisMet
   return parsed as ScoringResult;
 }
 
-export function validateAndParseForTest(raw: string, options: { analysisMetadata?: AnalysisMetadata | null } = {}): ScoringResult {
+export function validateAndParseForTest(raw: string, options: { analysisMetadata?: AnalysisMetadata | null; transcript?: string | null } = {}): ScoringResult {
   return validateAndParse(raw, options);
 }
 
@@ -995,10 +995,10 @@ async function processOne(
 
     let result: ScoringResult;
     try {
-      result = validateAndParse(raw, { analysisMetadata });
+      result = validateAndParse(raw, { analysisMetadata, transcript: request.transcript });
     } catch (e: any) {
       raw = await repairScoringJson(config, raw, e?.message || String(e));
-      result = validateAndParse(raw, { analysisMetadata });
+      result = validateAndParse(raw, { analysisMetadata, transcript: request.transcript });
     }
     const scoreId = await writeScore(config, request.call_id, request.id, result, request.rep_name, request.call_title);
 
@@ -1054,7 +1054,7 @@ async function processOne(
     chunksAnalyzed: chunkResults.length,
     totalChunks: chunks.length,
   });
-  const result = validateAndParse(JSON.stringify(combined), { analysisMetadata });
+  const result = validateAndParse(JSON.stringify(combined), { analysisMetadata, transcript: request.transcript });
   
   const scoreId = await writeScore(config, request.call_id, request.id, result, request.rep_name, request.call_title);
 

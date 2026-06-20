@@ -57,6 +57,7 @@ export interface ScoreDisplayModel {
   nextActions: string[];
   betterScripts: BetterScriptDisplay[];
   keyMoments: Array<{ timestamp?: string; label: string; note?: string }>;
+  showKeyMomentsInSimpleView: boolean;
   categoryDiagnostics: {
     source: CategoryDiagnosticsSource;
     label: string;
@@ -64,7 +65,7 @@ export interface ScoreDisplayModel {
     collapsedByDefault: boolean;
     categories: ScoreDisplayCategory[];
   };
-  adminDiagnostics: { source: CategoryDiagnosticsSource; rawScoreId?: string | null } | null;
+  adminDiagnostics: { source: CategoryDiagnosticsSource; rawScoreId?: string | null; keyMomentsAvailable?: boolean } | null;
 }
 
 export function buildScoreDisplayModel(scoreRow: any, options: { isAdmin: boolean }): ScoreDisplayModel {
@@ -74,13 +75,13 @@ export function buildScoreDisplayModel(scoreRow: any, options: { isAdmin: boolea
   const usedTopics = new Set<string>();
   const categoryAdvice = compactScoreBreakdown.categories.flatMap((category) => [category.reason, category.coaching, category.improvedScript]);
 
-  const quickVerdict = limitSentences(firstClean([
+  const quickVerdict = buildQuickVerdict(firstClean([
     rubricV2?.rep_facing_summary,
     typeof scoreRow?.coach_summary === 'string' ? scoreRow.coach_summary : null,
     scoreRow?.summary,
     scoreRow?.call_summary,
     rubricV2?.manager_summary,
-  ]) || buildFallbackVerdict(scoreRow), 3);
+  ]) || buildFallbackVerdict(scoreRow), scoreRow, rubricV2);
 
   const wins = takeUniqueAdvice([
     ...asArray(rubricV2?.best_moments).map(momentText),
@@ -121,8 +122,9 @@ export function buildScoreDisplayModel(scoreRow: any, options: { isAdmin: boolea
     nextActions,
     betterScripts,
     keyMoments,
+    showKeyMomentsInSimpleView: false,
     categoryDiagnostics: diagnostics,
-    adminDiagnostics: options.isAdmin ? { source: diagnostics.source, rawScoreId: scoreRow?.id || null } : null,
+    adminDiagnostics: options.isAdmin ? { source: diagnostics.source, rawScoreId: scoreRow?.id || null, keyMomentsAvailable: keyMoments.length > 0 } : null,
   };
 }
 
@@ -248,25 +250,35 @@ function buildOutcomeDisplay(scoreRow: any, rubricV2: any): ScoreDisplayModel['o
   const managerCloseType = cleanText(scoreRow?.manual_close_type);
   const aiOutcome = cleanText(rubricV2?.deal_outcome?.final_outcome || scoreRow?.outcome || scoreRow?.close_outcome);
   const aiCloseType = cleanText(scoreRow?.close_type);
+  const managerLabelRaw = managerOutcome ? formatOutcome(managerOutcome, managerCloseType) : null;
+  const aiLabelRaw = aiOutcome ? formatOutcome(aiOutcome, aiCloseType) : null;
 
-  if (managerOutcome) {
-    const managerLabel = `Manager Outcome: ${formatOutcome(managerOutcome, managerCloseType)}`;
-    const aiLabel = aiOutcome ? `AI Outcome: ${formatOutcome(aiOutcome, aiCloseType)}` : null;
-    return { primaryLabel: managerLabel, secondaryLabel: aiLabel, badges: [managerLabel, ...(aiLabel ? [aiLabel] : [])] };
+  if (managerLabelRaw) {
+    if (aiLabelRaw && normalizeOutcomeLabel(managerLabelRaw) === normalizeOutcomeLabel(aiLabelRaw)) {
+      return { primaryLabel: managerLabelRaw, secondaryLabel: null, badges: [managerLabelRaw] };
+    }
+    const primary = `Manager Outcome: ${managerLabelRaw}`;
+    const secondary = aiLabelRaw ? `AI Detected Outcome: ${aiLabelRaw}` : null;
+    return { primaryLabel: primary, secondaryLabel: secondary, badges: [primary, ...(secondary ? [secondary] : [])] };
   }
 
-  const primary = aiOutcome ? `AI Outcome: ${formatOutcome(aiOutcome, aiCloseType)}` : null;
+  const primary = aiLabelRaw ? `AI Outcome: ${aiLabelRaw}` : null;
   return { primaryLabel: primary, secondaryLabel: null, badges: primary ? [primary] : [] };
 }
 
 function formatOutcome(outcome: string, closeType?: string | null): string {
+  if (closeType === 'partial_access' || outcome === 'partial_access') return 'Partial Access Closed';
+  if (outcome === 'closed' && closeType) return formatOutcome(closeType);
   if (outcome === 'no_sale') return 'No Sale';
   if (outcome === 'deposit_collected') return 'Deposit Collected';
   if (outcome === 'payment_collected') return 'Payment Collected';
   if (outcome === 'payment_plan_arranged') return 'Payment Plan Arranged';
   if (outcome === 'follow_up_booked') return 'Follow Up Booked';
-  if (outcome === 'closed' && closeType) return formatTitle(closeType);
   return formatTitle(outcome);
+}
+
+function normalizeOutcomeLabel(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function formatTitle(value: string): string {
@@ -280,6 +292,17 @@ function cleanText(value: unknown): string {
     .replace(/\[\s*full\s+transcript\s*\]/gi, '')
     .replace(/no\s+solution\s+explanation\s*\/\s*value\s+building/gi, 'solution/value clarity gap')
     .replace(/no\s+solution\s+explanation\s+or\s+value\s+building/gi, 'solution/value clarity gap')
+    .replace(/\bno evidence of payment or commitment activity\b/gi, '')
+    .replace(/\boffer and pric(?:e|ing) (?:was |were )?not (?:yet )?discussed(?: or clarified)?(?: yet)?\b/gi, '')
+    .replace(/\bno offer or pric(?:e|ing) (?:was )?discussed(?: yet)?\b/gi, '')
+    .replace(/\bthe rep has not yet explained the solution or how it connects to the prospect'?s situation\b/gi, '')
+    .replace(/\bno close attempt(?: made)?\b/gi, '')
+    .replace(/\bclosing not attempted(?: yet)?\b/gi, '')
+    .replace(/\bno closing behavior (?:present|observed)\b/gi, '')
+    .replace(/\bno closing skill demonstrated(?: yet)?\b/gi, '')
+    .replace(/\bno payment or commitment (?:observed|behavior present|activity observed)\b/gi, '')
+    .replace(/\bclosing skill was not demonstrated in the analyzed transcript\b/gi, '')
+    .replace(/\bpitch and offer clarity was not present in the analyzed transcript\b/gi, '')
     .replace(/^null$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -318,6 +341,44 @@ function summarizeRawTranscriptSnippet(value: string): string {
     return 'Showed empathy for the prospect’s financial pressure.';
   }
   return value;
+}
+
+function buildQuickVerdict(base: string, scoreRow: any, rubricV2: any): string {
+  const outcome = buildOutcomeDisplay(scoreRow, rubricV2).primaryLabel;
+  const sentences: string[] = [];
+  if (outcome) sentences.push(outcome.replace(/^AI Outcome: /, '').replace(/^Manager Outcome: /, '') + '.');
+  sentences.push(...splitSentences(base));
+  if (sentences.length < 4) {
+    const score = numericOrNull(scoreRow?.score_total ?? scoreRow?.overall_score ?? rubricV2?.overall_score);
+    sentences.push(score != null && score < 70
+      ? 'The score is not higher because there are still process gaps in structure, discovery, value build, objection handling, or payment confirmation.'
+      : 'The score reflects the balance between the outcome achieved and the quality of the sales process.'
+    );
+  }
+  sentences.push('The main improvement is to make the next call more structured and easier for the prospect to commit to.');
+  const unique = takeUniqueSentences(sentences);
+  return unique.slice(0, 6).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function splitSentences(text: string): string[] {
+  const cleaned = cleanText(text);
+  if (!cleaned) return [];
+  return (cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleaned])
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .map((sentence) => /[.!?]$/.test(sentence) ? sentence : `${sentence}.`);
+}
+
+function takeUniqueSentences(sentences: string[]): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const sentence of sentences) {
+    const key = normalizeKey(sentence);
+    if (!key || seen.has(key)) continue;
+    output.push(sentence);
+    seen.add(key);
+  }
+  return output;
 }
 
 function asArray(value: unknown): any[] {
