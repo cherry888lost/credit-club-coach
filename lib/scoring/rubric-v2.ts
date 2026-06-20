@@ -110,6 +110,77 @@ export interface RubricV2BuildOptions {
   analysisCoveragePercentage?: number | null;
 }
 
+const BENCHMARK_SOURCE_NAMES = [
+  'Bina Patel',
+  'Luke Cockle',
+  'Emma Foster',
+  'Omar Pike',
+  'Fernando Cotrim',
+  'Georgia Smith',
+  'Mohit Garg',
+  'Rachel',
+  'Andrika Das',
+  'Shamil Morjaria',
+  'Nirmohan Singh Grover',
+  'Prismek Wegroc',
+  'Example Rep',
+  'Previous Customer',
+];
+
+const BENCHMARK_SOURCE_NAME_PATTERN = BENCHMARK_SOURCE_NAMES
+  .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  .join('|');
+const BENCHMARK_SOURCE_NAME_REGEX = new RegExp(`\\b(?:${BENCHMARK_SOURCE_NAME_PATTERN})\\b`, 'gi');
+const ATTRIBUTION_NAME_REGEX = `[A-Z][A-Za-z]+(?:\\s+[A-Z][A-Za-z]+){0,4}`;
+
+export function sanitizeBenchmarkContext(text: string): string {
+  return sanitizeSourceAttributionText(text);
+}
+
+function sanitizeSourceAttributionText(value: string): string {
+  return value
+    .replace(new RegExp(`\\bUse\\s+benchmark\\s+${ATTRIBUTION_NAME_REGEX}(?:'s)?\\s+approach\\s+to\\s+`, 'g'), '')
+    .replace(new RegExp(`\\buse\\s+benchmark\\s+${ATTRIBUTION_NAME_REGEX}(?:'s)?\\s+approach\\s+to\\s+`, 'gi'), '')
+    .replace(new RegExp(`\\bbenchmark\\s+${ATTRIBUTION_NAME_REGEX}(?:'s)?\\s+approach\\s+to\\s+`, 'gi'), '')
+    .replace(new RegExp(`\\bas\\s+${ATTRIBUTION_NAME_REGEX}\\s+did\\b`, 'g'), '')
+    .replace(new RegExp(`\\bas\\s+in\\s+${ATTRIBUTION_NAME_REGEX}(?:'s)?\\s+call\\b`, 'gi'), '')
+    .replace(new RegExp(`\\bin\\s+${ATTRIBUTION_NAME_REGEX}(?:'s)?\\s+call\\b`, 'g'), '')
+    .replace(new RegExp(`\\bcopy\\s+${ATTRIBUTION_NAME_REGEX}\\b`, 'gi'), 'use this structure')
+    .replace(new RegExp(`\\blike\\s+${ATTRIBUTION_NAME_REGEX}\\b`, 'gi'), 'using this structure')
+    .replace(new RegExp(`\\bbenchmark\\s+${ATTRIBUTION_NAME_REGEX}\\b`, 'gi'), 'benchmark example')
+    .replace(BENCHMARK_SOURCE_NAME_REGEX, 'a strong example')
+    .replace(/\bbenchmark example\b/gi, 'internal example')
+    .replace(/\s+([,.;:])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\(\s*\)/g, '')
+    .trim();
+}
+
+function sanitizeAdviceValue<T>(value: T): T {
+  if (typeof value === 'string') return sanitizeSourceAttributionText(value) as T;
+  if (Array.isArray(value)) return value.map((item) => sanitizeAdviceValue(item)) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, sanitizeAdviceValue(entry)])
+    ) as T;
+  }
+  return value;
+}
+
+function sanitizeMomentAdviceArray(value: unknown): any[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    if (!item || typeof item !== 'object') return sanitizeAdviceValue(item);
+    const record = item as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(record).map(([key, entry]) => {
+        if (key === 'quote' || key === 'timestamp' || key === 'speaker') return [key, entry];
+        return [key, sanitizeAdviceValue(entry)];
+      })
+    );
+  });
+}
+
 export function clampCategoryScore(score: unknown): number {
   const numeric = typeof score === 'number' && Number.isFinite(score) ? score : 1;
   return Math.max(1, Math.min(10, Math.round(numeric)));
@@ -157,8 +228,8 @@ export function calculateWeightedScore(
       what_happened: input?.what_happened || missingEvidenceQuote(options.analysisCoveragePercentage),
       why_this_score: input?.why_this_score || 'Score based on the rubric evidence available in the analyzed transcript.',
       evidence: normalizeCategoryEvidence(input?.evidence, options.analysisCoveragePercentage),
-      coaching_feedback: input?.coaching_feedback || 'No specific coaching feedback returned; manager review recommended.',
-      improved_example_phrasing: input?.improved_example_phrasing || '',
+      coaching_feedback: sanitizeAdviceValue(input?.coaching_feedback || 'No specific coaching feedback returned; manager review recommended.'),
+      improved_example_phrasing: sanitizeAdviceValue(input?.improved_example_phrasing || ''),
     };
   });
 
@@ -184,6 +255,10 @@ export function calculateWeightedScore(
 export function buildRubricV2Result(raw: any, options: RubricV2BuildOptions = {}): RubricV2Result {
   const complianceFlags = normalizeComplianceFlags(raw?.compliance_flags);
   const calculated = calculateWeightedScore(raw?.category_scores || [], complianceFlags, options);
+  const sanitizedMissedOpportunities = sanitizeMomentAdviceArray(raw?.missed_opportunities);
+  const sanitizedCoachingActions = sanitizeAdviceValue(
+    Array.isArray(raw?.top_3_coaching_actions) ? raw.top_3_coaching_actions.slice(0, 3) : []
+  );
 
   return {
     rubric_version: RUBRIC_VERSION_V2,
@@ -192,13 +267,13 @@ export function buildRubricV2Result(raw: any, options: RubricV2BuildOptions = {}
     score_calculation: calculated.scoreCalculation,
     deal_outcome: normalizeDealOutcome(raw?.deal_outcome),
     category_scores: calculated.categoryScores,
-    best_moments: Array.isArray(raw?.best_moments) ? raw.best_moments : [],
-    missed_opportunities: Array.isArray(raw?.missed_opportunities) ? raw.missed_opportunities : [],
-    top_3_coaching_actions: Array.isArray(raw?.top_3_coaching_actions) ? raw.top_3_coaching_actions.slice(0, 3) : [],
+    best_moments: sanitizeMomentAdviceArray(raw?.best_moments),
+    missed_opportunities: sanitizedMissedOpportunities,
+    top_3_coaching_actions: sanitizedCoachingActions,
     compliance_flags: complianceFlags,
-    manager_summary: typeof raw?.manager_summary === 'string' ? raw.manager_summary : '',
-    rep_facing_summary: typeof raw?.rep_facing_summary === 'string' ? raw.rep_facing_summary : '',
-    timestamped_key_moments: Array.isArray(raw?.timestamped_key_moments) ? raw.timestamped_key_moments : [],
+    manager_summary: sanitizeAdviceValue(typeof raw?.manager_summary === 'string' ? raw.manager_summary : ''),
+    rep_facing_summary: sanitizeAdviceValue(typeof raw?.rep_facing_summary === 'string' ? raw.rep_facing_summary : ''),
+    timestamped_key_moments: sanitizeMomentAdviceArray(raw?.timestamped_key_moments),
   };
 }
 
@@ -462,9 +537,16 @@ Only mark payment/deposit/plan as true with clear transcript evidence. If unclea
 COMPLIANCE FLAGS:
 Flag clear evidence of guaranteed approval, guaranteed score increase, unrealistic timeline promises, misleading claims, or inappropriate pressure tactics. Include safer wording. High severity flags require exact evidence.
 
-${params.benchmarkContext || ''}
+PRIVACY AND COACHING OUTPUT RULES:
+- Benchmark and pattern-library examples are internal guidance only. Do not mention benchmark names, rep names, customer names, or previous call names in final coaching output. Convert benchmark lessons into anonymized coaching instructions and example phrasing.
+- User-facing coaching must be instruction-based: "Isolate the objection before responding", "Try saying...", "Use this structure...".
+- Never write phrases like "as [person] did", "in [person]'s call", "benchmark [person]", "copy [person]", or "like [person]".
+- Suggested phrasing and coaching advice may use generic examples, but no other reps, old customers, benchmark calls, or previous call names.
+- Verbatim transcript evidence from the current call may include names only when they appear in direct quotes.
 
-${params.knowledgeContext || ''}
+${sanitizeBenchmarkContext(params.benchmarkContext || '')}
+
+${sanitizeBenchmarkContext(params.knowledgeContext || '')}
 
 Return ONLY valid JSON matching this shape:
 {

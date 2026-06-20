@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CATEGORY_WEIGHTS_V2,
+  buildRubricV2Prompt,
   buildRubricV2Result,
   calculateWeightedScore,
   mapRubricV2ToLegacy,
@@ -270,6 +271,70 @@ describe('Credit Club scoring rubric v2', () => {
 
     expect(full[0].quote).toBe('Not observed in the full analyzed transcript.');
     expect(partial[0].quote).toBe('Not observed in the analyzed transcript segment. Do not conclude this was absent from the full call.');
+  });
+
+  it('removes benchmark and previous-call names from user-facing coaching advice while preserving current-call evidence quotes', () => {
+    const raw = baseModelResult({ objection_handling: 4, closing_skill: 4 });
+    raw.manager_summary = 'Use benchmark Georgia Smith\'s approach to isolate the objection before responding.';
+    raw.rep_facing_summary = 'Attempt a deposit close as Georgia Smith did, but keep it natural.';
+    raw.category_scores = categoryScores({ objection_handling: 4, closing_skill: 4 }).map((category) => {
+      if (category.category_key !== 'objection_handling') return category;
+      return {
+        ...category,
+        coaching_feedback: 'Handle pricing objections by isolating and reframing as in Omar Pike\'s call.',
+        improved_example_phrasing: 'Do not copy Example Rep; ask what is holding them back.',
+        evidence: [{ timestamp: '12:00', speaker: 'Prospect', quote: 'Georgia Smith told me to ask about the programme.' }],
+      };
+    });
+    raw.best_moments = [{ timestamp: '08:00', title: 'Current-call quote', quote: 'Previous Customer is my business partner.', why_it_was_strong: 'Used current-call evidence only.' }];
+    raw.missed_opportunities = [{ timestamp: '22:00', issue: 'Benchmark Georgia Smith close missed', coaching_feedback: 'Use benchmark Georgia Smith\'s approach to isolate objections.', what_to_do_instead: 'Ask clearly, not like Omar Pike.' }];
+    raw.top_3_coaching_actions = [{ priority: 1, skill: 'Deposit close', action: 'Attempt a deposit close as Georgia Smith did.', practice_drill: 'Do not copy Example Rep.', example_phrase: 'Secure your place with a £500 deposit.' }];
+
+    const result = buildRubricV2Result(raw, { analysisCoveragePercentage: 100 });
+    const legacy = mapRubricV2ToLegacy(result);
+    const userFacingAdvice = JSON.stringify({
+      manager_summary: result.manager_summary,
+      rep_facing_summary: result.rep_facing_summary,
+      top_3_coaching_actions: result.top_3_coaching_actions,
+      missed_opportunities: result.missed_opportunities,
+      categories: result.category_scores.map((category) => ({
+        coaching_feedback: category.coaching_feedback,
+        improved_example_phrasing: category.improved_example_phrasing,
+      })),
+      coach_summary: {
+        needs_work: legacy.coach_summary.needs_work,
+        action_items: legacy.coach_summary.action_items,
+        manager_summary: legacy.coach_summary.manager_summary,
+        rep_facing_summary: legacy.coach_summary.rep_facing_summary,
+      },
+      enhanced_weaknesses: legacy.enhanced_weaknesses,
+      objection_scripts: (legacy.objection_scripts || []).map((script: any) => ({
+        better_response: script.better_response,
+        technique: script.technique,
+      })),
+    });
+
+    expect(userFacingAdvice).not.toMatch(/Georgia Smith|Omar Pike|Example Rep|Previous Customer/);
+    expect(userFacingAdvice).not.toMatch(/as\s+[A-Z][a-z]+\s+[A-Z][a-z]+\s+did/);
+    expect(userFacingAdvice).not.toMatch(/benchmark\s+[A-Z][a-z]+\s+[A-Z][a-z]+/i);
+    expect(userFacingAdvice).not.toMatch(/copy\s+[A-Z][a-z]+\s+[A-Z][a-z]+/i);
+    expect(result.category_scores.find((category) => category.category_key === 'objection_handling')?.evidence[0].quote).toContain('Georgia Smith');
+    expect(result.best_moments[0].quote).toContain('Previous Customer');
+    expect(legacy.rubric_v2).toEqual(result);
+    expect(legacy.categories.objection_handling).toBeTruthy();
+  });
+
+  it('treats benchmark context as internal guidance without exposing source names in prompts', () => {
+    const prompt = buildRubricV2Prompt({
+      transcript: 'Rep: The deposit is £500. Prospect: I need to think about it.',
+      repName: 'Current Rep',
+      benchmarkContext: 'Use benchmark Georgia Smith\'s approach. Handle pricing objections as in Omar Pike\'s call. Previous Customer accepted after this close.',
+      knowledgeContext: 'A stronger approach would be to isolate the objection, then ask for a deposit commitment.',
+    });
+
+    expect(prompt).toContain('Benchmark and pattern-library examples are internal guidance only');
+    expect(prompt).toContain('isolate the objection');
+    expect(prompt).not.toMatch(/Georgia Smith|Omar Pike|Previous Customer/);
   });
 
   it('maps v2 output into legacy fields for dashboards and controlled learning', () => {

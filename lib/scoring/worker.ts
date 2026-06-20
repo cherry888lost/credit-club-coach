@@ -13,7 +13,7 @@
 
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { buildRubricV2Prompt, buildRubricV2Result, mapRubricV2ToLegacy } from './rubric-v2';
+import { buildRubricV2Prompt, buildRubricV2Result, mapRubricV2ToLegacy, sanitizeBenchmarkContext } from './rubric-v2';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -424,10 +424,11 @@ function loadBenchmarksForCloseType(closeType: keyof typeof BENCHMARK_LIBRARY): 
   
   for (const bm of benchmarks) {
     const content = loadBenchmarkCall(closeType, bm.file);
-    if (content && !content.includes('[PLACEHOLDER') && !content.includes('[Benchmark content pending')) {
-      parts.push(`## ${bm.name}\n${content}`);
+    const sanitizedContent = sanitizeBenchmarkContext(content);
+    if (sanitizedContent && !sanitizedContent.includes('[PLACEHOLDER') && !sanitizedContent.includes('[Benchmark content pending')) {
+      parts.push(`## Internal pattern example\n${sanitizedContent}`);
     } else {
-      parts.push(`## ${bm.name}\n[Benchmark content pending - not yet extracted]`);
+      parts.push('## Internal pattern example\n[Benchmark content pending - not yet extracted]');
     }
   }
   
