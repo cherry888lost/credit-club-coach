@@ -1,44 +1,100 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUserWithRole } from "@/lib/auth";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
 import { 
   CheckCircle, 
-  XCircle, 
-  AlertCircle,
+  XCircle,
   Users,
   Webhook,
   Database,
   Shield,
   Activity,
-  Phone,
-  Mail,
-  Clock,
-  AlertTriangle,
   Terminal,
   Radio,
   ArrowRight,
   CheckSquare,
   XSquare,
   ChevronDown,
-  Settings,
   Bug
 } from "lucide-react";
 import ResetDemoButton from "./_components/ResetDemoButton";
+
+type WebhookDiagnostic = {
+  source?: string;
+  received_at?: string;
+  request_id?: string;
+  event_type?: string;
+  status?: string;
+  recording_id?: string;
+  source_detected?: string;
+  is_zapier?: boolean;
+  signature_check_skipped_for_zapier?: boolean;
+  signature_required?: boolean;
+  signature_present?: boolean;
+  signature_valid?: boolean;
+  signature_error?: string;
+  route?: string;
+  fathom_fetch_success?: boolean;
+  fathom_fetch_error?: string;
+  base_recording_endpoint?: string;
+  base_recording_status?: number;
+  base_recording_keys?: string[];
+  transcript_status?: number;
+  summary_status?: number;
+  fields_extracted?: string[];
+  host_email?: string;
+  rep_matched?: boolean;
+  rep_name?: string;
+  rep_id?: string;
+  match_method?: string;
+  call_inserted?: boolean;
+  call_id?: string;
+  db_error?: string;
+  final_action?: string;
+  final_error?: string;
+  http_status?: number;
+  payload_parsed?: boolean;
+  fathom_fetch_details?: boolean;
+  fathom_fetch_endpoint?: string;
+  fathom_fetch_status?: number;
+  fathom_fetch_status_text?: string;
+  fathom_fetch_auth_mode?: string;
+  fathom_fetch_fields_found?: string[];
+  insert_error?: string;
+};
+
+type RecentWebhook = {
+  request_id: string;
+  event_type: string;
+  status: string;
+  created_at: string;
+};
+
+type EnvDiagnostic = {
+  present: boolean;
+  value: string | null;
+};
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function SettingsPage() {
-  const user = await getCurrentUser();
+  const user = await getCurrentUserWithRole();
   
   if (!user || !user.rep) {
     return null;
   }
+
+  // SERVER-SIDE: Settings is admin-only
+  if (!user.isAdminUser) {
+    redirect("/dashboard");
+  }
   
-  const isAdmin = user.rep.role === "admin";
+  const isAdmin = user.isAdminUser;
   
   // ========== RAW ENV VAR DIAGNOSTICS ==========
-  const envDiagnostics = {
+  const envDiagnostics: Record<string, EnvDiagnostic> = {
     NEXT_PUBLIC_SUPABASE_URL: {
       present: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
       value: process.env.NEXT_PUBLIC_SUPABASE_URL ? `${process.env.NEXT_PUBLIC_SUPABASE_URL.substring(0, 20)}...` : null
@@ -78,8 +134,8 @@ export default async function SettingsPage() {
   const fathomWebhookConfigured = envDiagnostics.FATHOM_WEBHOOK_SECRET.present;
   
   // ========== LIVE WEBHOOK DIAGNOSTICS ==========
-  let liveWebhookDiag: any = null;
-  let recentWebhooks: any[] = [];
+  let liveWebhookDiag: WebhookDiagnostic | null = null;
+  let recentWebhooks: RecentWebhook[] = [];
   let dbError: string | null = null;
   
   if (supabaseConfigured) {
@@ -152,10 +208,10 @@ export default async function SettingsPage() {
         .order("created_at", { ascending: false })
         .limit(5);
       
-      recentWebhooks = recent || [];
+      recentWebhooks = (recent || []) as RecentWebhook[];
       
-    } catch (err: any) {
-      dbError = err.message;
+    } catch (err: unknown) {
+      dbError = err instanceof Error ? err.message : "Unknown database error";
     }
   }
   
@@ -291,7 +347,7 @@ export default async function SettingsPage() {
                             {liveWebhookDiag.source?.toUpperCase() || 'UNKNOWN'}
                           </span>
                         </div>
-                        <span className="text-white font-mono text-sm">{formatTimeAgo(liveWebhookDiag.received_at)}</span>
+                        <span className="text-white font-mono text-sm">{formatTimeAgo(liveWebhookDiag.received_at || new Date().toISOString())}</span>
                       </div>
                       
                       {/* Trace Steps */}
@@ -472,7 +528,7 @@ export default async function SettingsPage() {
                 <div className="mt-4">
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-2 font-medium">Recent webhooks (last 5):</p>
                   <div className="space-y-1">
-                    {recentWebhooks.map((wh: any) => (
+                    {recentWebhooks.map((wh) => (
                       <div key={wh.request_id} className="flex items-center gap-3 text-xs p-2.5 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
                         <span className={wh.status === "error" ? "text-red-500 dark:text-red-400" : "text-green-500 dark:text-green-400"}>
                           {wh.status === "error" ? "✗" : "✓"}
@@ -496,17 +552,17 @@ export default async function SettingsPage() {
               <Terminal className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               <span className="font-semibold text-zinc-900 dark:text-white">Environment</span>
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                Object.values(envDiagnostics).every((d: any) => d.present)
+                Object.values(envDiagnostics).every((d) => d.present)
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
                   : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'
               }`}>
-                {Object.values(envDiagnostics).filter((d: any) => d.present).length}/{Object.keys(envDiagnostics).length} configured
+                {Object.values(envDiagnostics).filter((d) => d.present).length}/{Object.keys(envDiagnostics).length} configured
               </span>
               <span className="ml-auto text-xs text-zinc-400">Click to expand</span>
             </summary>
             <div className="p-5 pt-0 border-t border-zinc-200 dark:border-zinc-800">
               <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 font-mono text-sm">
-                {Object.entries(envDiagnostics).map(([name, data]: [string, any]) => (
+                {Object.entries(envDiagnostics).map(([name, data]) => (
                   <div key={name} className={`p-3 rounded-lg border ${data.present ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'}`}>
                     <div className="flex items-center gap-2">
                       {data.present ? (
