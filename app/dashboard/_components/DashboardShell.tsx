@@ -24,7 +24,7 @@ const navigation = [
   { name: "Reps", href: "/dashboard/reps", icon: Users, adminOnly: false },
   { name: "Analysis", href: "/dashboard/analysis", icon: BarChart3, adminOnly: true },
   { name: "Import Calls", href: "/dashboard/import-calls", icon: Upload, adminOnly: true },
-  { name: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: false },
+  { name: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: true },
   { name: "Collections", href: "/dashboard/collections", icon: WalletCards, adminOnly: false },
 ];
 

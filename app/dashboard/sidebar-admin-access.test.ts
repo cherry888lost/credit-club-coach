@@ -7,6 +7,7 @@ const learningPagePath = 'app/dashboard/learning-queue/page.tsx';
 const learningClientPath = 'app/dashboard/learning-queue/LearningQueueClient.tsx';
 const patternsPagePath = 'app/dashboard/patterns/page.tsx';
 const patternsClientPath = 'app/dashboard/patterns/PatternsClient.tsx';
+const settingsPagePath = 'app/dashboard/settings/page.tsx';
 
 const protectedApiPaths = [
   'app/api/learning-queue/route.ts',
@@ -22,6 +23,7 @@ const shellSource = readFileSync(shellPath, 'utf8');
 const analysisPageSource = readFileSync(analysisPagePath, 'utf8');
 const learningPageSource = readFileSync(learningPagePath, 'utf8');
 const patternsPageSource = readFileSync(patternsPagePath, 'utf8');
+const settingsPageSource = readFileSync(settingsPagePath, 'utf8');
 
 describe('dashboard sidebar soft-hide for stale learning surfaces', () => {
   it('keeps Analysis and Collections in the dashboard sidebar', () => {
@@ -36,6 +38,26 @@ describe('dashboard sidebar soft-hide for stale learning surfaces', () => {
     expect(shellSource).not.toContain('/dashboard/learning-queue');
     expect(shellSource).not.toContain('Pattern Library');
     expect(shellSource).not.toContain('/dashboard/patterns');
+  });
+});
+
+describe('settings dashboard permissions', () => {
+  it('keeps Settings in the sidebar for admins only, while common items remain visible to all', () => {
+    expect(shellSource).toContain('{ name: "Overview", href: "/dashboard", icon: LayoutDashboard, adminOnly: false }');
+    expect(shellSource).toContain('{ name: "Calls", href: "/dashboard/calls", icon: Phone, adminOnly: false }');
+    expect(shellSource).toContain('{ name: "Reps", href: "/dashboard/reps", icon: Users, adminOnly: false }');
+    expect(shellSource).toContain('{ name: "Analysis", href: "/dashboard/analysis", icon: BarChart3, adminOnly: true }');
+    expect(shellSource).toContain('{ name: "Import Calls", href: "/dashboard/import-calls", icon: Upload, adminOnly: true }');
+    expect(shellSource).toContain('{ name: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: true }');
+    expect(shellSource).toContain('{ name: "Collections", href: "/dashboard/collections", icon: WalletCards, adminOnly: false }');
+    expect(shellSource).toContain('.filter((item) => !item.adminOnly || isAdminUser)');
+  });
+
+  it('protects direct Settings access server-side for authenticated non-admins', () => {
+    expect(settingsPageSource).toContain('getCurrentUserWithRole');
+    expect(settingsPageSource).toContain('!user.isAdminUser');
+    expect(settingsPageSource).toContain('redirect("/dashboard")');
+    expect(settingsPageSource).toContain('Settings');
   });
 });
 
