@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   Loader2,
   FileText,
-  ArrowLeft,
 } from "lucide-react";
 
 interface RepOption {
@@ -125,7 +124,7 @@ export default function ImportCallsPage() {
       const data = await res.json();
       setResult({
         callId: data.call_id,
-        scoringQueued: queueForScoring,
+        scoringQueued: Boolean(data.scoring_queued),
       });
 
       // Reset form
@@ -421,7 +420,7 @@ export default function ImportCallsPage() {
           ) : (
             <FileText className="w-4 h-4" />
           )}
-          Save Only
+          Save Without Scoring
         </button>
         <button
           onClick={() => handleSubmit(true)}
@@ -433,7 +432,7 @@ export default function ImportCallsPage() {
           ) : (
             <Upload className="w-4 h-4" />
           )}
-          Save & Queue for Scoring
+          Import & Queue for Scoring
         </button>
       </div>
     </div>

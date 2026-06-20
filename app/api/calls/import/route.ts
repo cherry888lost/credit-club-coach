@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * POST /api/calls/import
  *
  * Manually import a call with transcript.
- * Admin only. Optionally queues for AI scoring.
+ * Admin only. Queues for AI scoring by default when transcript exists.
  */
 export async function POST(request: NextRequest) {
   const user = await getCurrentUserWithRole();
@@ -34,10 +34,7 @@ export async function POST(request: NextRequest) {
     occurred_at,
     duration_seconds,
     transcript,
-    outcome_hint,
-    close_type_hint,
     recording_url,
-    notes,
     queue_for_scoring,
   } = body as {
     title?: string;
@@ -45,10 +42,7 @@ export async function POST(request: NextRequest) {
     occurred_at?: string | null;
     duration_seconds?: number | null;
     transcript?: string;
-    outcome_hint?: string | null;
-    close_type_hint?: string | null;
     recording_url?: string | null;
-    notes?: string | null;
     queue_for_scoring?: boolean;
   };
 
@@ -76,9 +70,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Rep not found" }, { status: 400 });
   }
 
+  const shouldQueueForScoring = queue_for_scoring !== false && Boolean(transcript.trim());
+
   // Create call record
   // NOTE: metadata column may not exist on all DB instances; store import
-  // context in fields the table definitely has (rep_name, call_date, source).
+  // context in fields the table definitely has.
   const callPayload: Record<string, unknown> = {
     org_id: DEFAULT_ORG_ID,
     rep_id: rep.id,
@@ -86,6 +82,10 @@ export async function POST(request: NextRequest) {
     call_date: occurred_at ? new Date(occurred_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
     duration_seconds: duration_seconds || null,
     transcript: transcript.trim(),
+    transcript_status: "ready",
+    transcript_source: "manual",
+    // Set to pending only after a scoring_request is confirmed below.
+    score_status: null,
     source_url: recording_url || null,
     rep_name: rep.name,
   };
@@ -104,34 +104,74 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Optionally queue for scoring
-  if (queue_for_scoring) {
-    const { error: scoringError } = await supabase
-      .from("scoring_requests")
-      .insert({
-        call_id: call.id,
-        status: "pending",
-        call_title: title.trim(),
-        rep_name: rep.name,
-        call_date: callPayload.call_date,
-        duration_seconds: duration_seconds || null,
-        transcript: transcript.trim(),
-        requested_by: user.userId,
-      });
+  let scoringQueued = false;
+  let scoringRequestId: string | null = null;
 
-    if (scoringError) {
-      console.error("[ImportCall] Error creating scoring request:", scoringError);
-      // Call was created successfully, just scoring queue failed
+  // Queue for scoring by default when a transcript exists, unless the admin
+  // explicitly chooses the Save Without Scoring path.
+  if (shouldQueueForScoring) {
+    const { data: existingRequest, error: existingRequestError } = await supabase
+      .from("scoring_requests")
+      .select("id, status")
+      .eq("call_id", call.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (existingRequestError) {
+      console.error("[ImportCall] Error checking scoring request:", existingRequestError);
       return NextResponse.json({
         call_id: call.id,
         scoring_queued: false,
-        scoring_error: scoringError.message,
+        scoring_error: existingRequestError.message,
       });
+    }
+
+    if (existingRequest?.id) {
+      scoringQueued = true;
+      scoringRequestId = existingRequest.id;
+    } else {
+      const { data: scoringRequest, error: scoringError } = await supabase
+        .from("scoring_requests")
+        .insert({
+          call_id: call.id,
+          status: "pending",
+          call_title: title.trim(),
+          rep_name: rep.name,
+          call_date: callPayload.call_date,
+          duration_seconds: duration_seconds || null,
+          transcript: transcript.trim(),
+          requested_by: user.userId,
+        })
+        .select("id")
+        .single();
+
+      if (scoringError) {
+        console.error("[ImportCall] Error creating scoring request:", scoringError);
+        // Call was created successfully, just scoring queue failed
+        return NextResponse.json({
+          call_id: call.id,
+          scoring_queued: false,
+          scoring_error: scoringError.message,
+        });
+      }
+
+      scoringQueued = true;
+      scoringRequestId = scoringRequest?.id || null;
+    }
+
+    const { error: callStatusError } = await supabase
+      .from("calls")
+      .update({ score_status: "pending" })
+      .eq("id", call.id);
+
+    if (callStatusError) {
+      console.error("[ImportCall] Error updating call score status:", callStatusError);
     }
   }
 
   return NextResponse.json({
     call_id: call.id,
-    scoring_queued: !!queue_for_scoring,
+    scoring_queued: scoringQueued,
+    scoring_request_id: scoringRequestId,
   });
 }
