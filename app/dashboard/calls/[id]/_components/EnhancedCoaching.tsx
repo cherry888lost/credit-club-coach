@@ -45,17 +45,19 @@ export function EnhancedCoaching({
   enhancedWeaknesses: EnhancedWeakness[];
   objectionScripts: ObjectionScript[];
 }) {
-  if (
-    (!enhancedWeaknesses || enhancedWeaknesses.length === 0) &&
-    (!objectionScripts || objectionScripts.length === 0)
-  ) {
+  const visibleWeaknesses = (enhancedWeaknesses || []).filter(
+    (w) => hasText(w.what_went_wrong) || hasText(w.why_it_matters) || hasText(w.better_response_example)
+  );
+  const visibleScripts = (objectionScripts || []).filter((script) => hasText(script.better_response));
+
+  if (visibleWeaknesses.length === 0 && visibleScripts.length === 0) {
     return null;
   }
 
   return (
     <div className="space-y-4">
       {/* Enhanced Weaknesses */}
-      {enhancedWeaknesses && enhancedWeaknesses.length > 0 && (
+      {visibleWeaknesses.length > 0 && (
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-amber-200 dark:border-amber-800/50">
           <div className="p-4 border-b border-amber-200 dark:border-amber-800/50 flex items-center gap-2">
             <AlertTriangle className="w-5 h-5 text-amber-600" />
@@ -65,7 +67,7 @@ export function EnhancedCoaching({
           </div>
 
           <div className="p-4 space-y-4">
-            {enhancedWeaknesses.map((w, i) => (
+            {visibleWeaknesses.map((w, i) => (
               <div
                 key={i}
                 className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden"
@@ -118,7 +120,7 @@ export function EnhancedCoaching({
       )}
 
       {/* Objection Scripts */}
-      {objectionScripts && objectionScripts.length > 0 && (
+      {visibleScripts.length > 0 && (
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-indigo-200 dark:border-indigo-800/50">
           <div className="p-4 border-b border-indigo-200 dark:border-indigo-800/50 flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-indigo-600" />
@@ -128,7 +130,7 @@ export function EnhancedCoaching({
           </div>
 
           <div className="p-4 space-y-4">
-            {objectionScripts.map((os, i) => (
+            {visibleScripts.map((os, i) => (
               <div
                 key={i}
                 className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden"
@@ -181,4 +183,8 @@ export function EnhancedCoaching({
       )}
     </div>
   );
+}
+
+function hasText(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0 && value.trim().toLowerCase() !== "null";
 }

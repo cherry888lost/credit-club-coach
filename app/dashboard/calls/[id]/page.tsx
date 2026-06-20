@@ -1,18 +1,18 @@
 import { getCurrentUserWithRole, getDefaultOrgId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { RefreshMediaButton } from "./refresh-media-button";
 import { GenerateScoreButton } from "./generate-score-button";
 import { OutcomeLogger } from "./_components/OutcomeLogger";
 // import { FollowUpGenerator } from "./_components/FollowUpGenerator";
 import { EnhancedCoaching } from "./_components/EnhancedCoaching";
-import { CoachingMarkers } from "./_components/CoachingMarkers";
-import { CloseTypeBadge } from "@/components/ui/CloseTypeBadge";
+import { CoachingMarkers, type CoachingMarker } from "./_components/CoachingMarkers";
 import { ObjectionTimeline } from "@/components/ui/ObjectionTimeline";
 import { TechniqueBadge } from "@/components/ui/TechniqueBadge";
 import { CoachingFeedback } from "@/components/ui/CoachingFeedback";
 import { KeyQuotes } from "@/components/ui/KeyQuotes";
+import { buildScoreDisplayModel } from "@/lib/scoring/score-display";
 import {
   ArrowLeft,
   User,
@@ -36,7 +36,6 @@ import {
   Lightbulb,
   MessageSquare,
   Wrench,
-  Trash2,
   Award,
   Zap,
   BarChart3,
@@ -132,18 +131,6 @@ function outcomeColor(outcome: string): string {
   }
 }
 
-// FIXED: New close type display labels
-function closeTypeLabel(closeType: string | null): string {
-  if (!closeType) return "";
-  const labels: Record<string, string> = {
-    full_close: "Full Close",
-    payment_plan: "Payment Plan", 
-    deposit: "Deposit",
-    partial_access: "Partial Access",
-  };
-  return labels[closeType] || closeType;
-}
-
 function breakdownBarColor(pct: number): string {
   if (pct >= 75) return "bg-green-500";
   if (pct >= 50) return "bg-amber-500";
@@ -235,7 +222,8 @@ export default async function CallDetailPage({ params }: { params: { id: string 
 
   const bestOption = playbackOptions[0];
 
-  // Parse categories from new scoring schema
+  // Parse categories from scoring schema. Prefer rubric_v2 for display diagnostics, legacy only as fallback.
+  const displayModel = isScored ? buildScoreDisplayModel(scores, { isAdmin }) : null;
   const categories = scores?.categories as Record<string, { score: number; reasoning: string; evidence: string; improvement_tip: string }> | null;
 
   const formatDuration = (seconds?: number) => {
@@ -245,12 +233,9 @@ export default async function CallDetailPage({ params }: { params: { id: string 
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
-  // Parse coach summary
-  const coachSummary = scores?.coach_summary as { did_well?: string[]; needs_work?: string[]; action_items?: string[] } | null;
-
   // Parse enhanced fields safely
   const scoreBreakdown = scores?.score_breakdown as Record<string, number> | null;
-  const closeAnalysis = scores?.close_analysis as { type?: string; confidence?: number; structure?: any; evidence?: string[] } | null;
+  const closeAnalysis = scores?.close_analysis as { type?: string; confidence?: number; structure?: unknown; evidence?: string[] } | null;
   const objectionDetails = scores?.objection_details as Array<{ type: string; timestamp?: string; quote: string; response_quote: string; handling_score: number; confidence?: number }> | null;
   const techniquesDetected = scores?.techniques_detected as Record<string, { score: number; components_used?: string[]; types_used?: string[]; evidence: string[] }> | null;
   const missedOpportunities = scores?.missed_opportunities as string[] | null;
@@ -295,28 +280,17 @@ export default async function CallDetailPage({ params }: { params: { id: string 
               </span>
             )}
 
-            {isScored && (() => {
-              // manual_outcome takes priority, then AI fields (outcome OR close_outcome)
-              const effectiveOutcome = scores.manual_outcome || scores.outcome || scores.close_outcome || "pending";
-              // Only show close type label when the effective outcome is "closed"
-              // (prevents AI close_type from overriding a manual "no_sale" selection)
-              const effectiveCloseType = effectiveOutcome === "no_sale"
-                ? null
-                : (scores.manual_close_type || scores.close_type);
-              return (
-                <span className={`px-2.5 py-1 text-xs font-semibold rounded-full uppercase ${outcomeColor(effectiveOutcome)}`}>
-                  {closeTypeLabel(effectiveCloseType) || effectiveOutcome.replace("_", " ")}
-                </span>
-              );
-            })()}
+            {isScored && displayModel?.outcome.primaryLabel && (
+              <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${outcomeColor(scores.manual_outcome || scores.outcome || scores.close_outcome || "pending")}`}>
+                {displayModel.outcome.primaryLabel}
+              </span>
+            )}
 
-            {isScored && (() => {
-              const effectiveOutcome = scores.manual_outcome || scores.outcome || scores.close_outcome || "pending";
-              const closeType = scores.manual_close_type || scores.close_type;
-              // Hide close type badge entirely when outcome is no_sale
-              if (!closeType || effectiveOutcome === "no_sale") return null;
-              return <CloseTypeBadge type={closeType} />;
-            })()}
+            {isScored && displayModel?.outcome.secondaryLabel && (
+              <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                {displayModel.outcome.secondaryLabel}
+              </span>
+            )}
 
             {/* Grade badge for enhanced analysis */}
             {grade && (
@@ -456,22 +430,26 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         isAdmin={isAdmin}
       />
 
-      {/* ─── Coach Summary ─── */}
-      {isScored && coachSummary && (coachSummary.did_well?.length || coachSummary.needs_work?.length || coachSummary.action_items?.length) ? (
+      {/* ─── Simple Coaching View ─── */}
+      {isScored && displayModel && (
         <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-xl border border-indigo-200 dark:border-indigo-800 shadow-sm">
           <div className="p-4 border-b border-indigo-200 dark:border-indigo-800 flex items-center gap-2">
             <Award className="w-5 h-5 text-indigo-600" />
-            <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-300">Coach Summary</h3>
+            <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-300">Simple Coaching View</h3>
           </div>
-          <div className="p-5 space-y-5">
-            {/* What they did well */}
-            {coachSummary.did_well && coachSummary.did_well.length > 0 && (
+          <div className="p-5 space-y-6">
+            <div>
+              <h4 className="text-sm font-semibold text-zinc-900 dark:text-white mb-2">Quick Verdict</h4>
+              <p className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">{displayModel.quickVerdict}</p>
+            </div>
+
+            {displayModel.wins.length > 0 && (
               <div>
                 <h4 className="flex items-center gap-2 text-sm font-semibold text-green-700 dark:text-green-400 mb-2">
-                  <TrendingUp className="w-4 h-4" /> What the rep did well
+                  <TrendingUp className="w-4 h-4" /> What went well
                 </h4>
                 <ul className="space-y-1.5">
-                  {coachSummary.did_well.map((item, i) => (
+                  {displayModel.wins.map((item, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
                       <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
                       {item}
@@ -481,16 +459,15 @@ export default async function CallDetailPage({ params }: { params: { id: string 
               </div>
             )}
 
-            {/* What hurt the call */}
-            {coachSummary.needs_work && coachSummary.needs_work.length > 0 && (
+            {displayModel.missedOpportunities.length > 0 && (
               <div>
-                <h4 className="flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-400 mb-2">
-                  <TrendingDown className="w-4 h-4" /> What hurt the call
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-amber-700 dark:text-amber-400 mb-2">
+                  <AlertTriangle className="w-4 h-4" /> Biggest missed opportunities
                 </h4>
                 <ul className="space-y-1.5">
-                  {coachSummary.needs_work.map((item, i) => (
+                  {displayModel.missedOpportunities.map((item, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
-                      <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                      <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
                       {item}
                     </li>
                   ))}
@@ -498,14 +475,13 @@ export default async function CallDetailPage({ params }: { params: { id: string 
               </div>
             )}
 
-            {/* What to do differently */}
-            {coachSummary.action_items && coachSummary.action_items.length > 0 && (
+            {displayModel.nextActions.length > 0 && (
               <div>
                 <h4 className="flex items-center gap-2 text-sm font-semibold text-indigo-700 dark:text-indigo-400 mb-2">
-                  <Lightbulb className="w-4 h-4" /> What to do differently next time
+                  <Lightbulb className="w-4 h-4" /> What to do on the next call
                 </h4>
-                <ul className="space-y-1.5">
-                  {coachSummary.action_items.map((item, i) => (
+                <ol className="space-y-1.5">
+                  {displayModel.nextActions.map((item, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
                       <span className="flex items-center justify-center w-5 h-5 rounded-full bg-indigo-200 dark:bg-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-bold flex-shrink-0 mt-0.5">
                         {i + 1}
@@ -513,17 +489,51 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                       {item}
                     </li>
                   ))}
+                </ol>
+              </div>
+            )}
+
+            {displayModel.betterScripts.length > 0 && (
+              <div>
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-green-700 dark:text-green-400 mb-2">
+                  <MessageSquare className="w-4 h-4" /> Better script
+                </h4>
+                <div className="space-y-2">
+                  {displayModel.betterScripts.map((script, i) => (
+                    <blockquote key={i} className="text-sm text-green-800 dark:text-green-200 bg-green-50 dark:bg-green-900/20 border-l-4 border-green-400 rounded-r-lg p-3">
+                      &ldquo;{script}&rdquo;
+                    </blockquote>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {displayModel.keyMoments.length > 0 && (
+              <div>
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
+                  <Clock className="w-4 h-4" /> Key call moments
+                </h4>
+                <ul className="space-y-2">
+                  {displayModel.keyMoments.map((moment, i) => (
+                    <li key={i} className="text-sm text-zinc-700 dark:text-zinc-300 bg-white/70 dark:bg-zinc-900/50 rounded-lg p-3 border border-indigo-100 dark:border-indigo-900/50">
+                      <div className="font-medium">
+                        {moment.timestamp ? <span className="text-indigo-600 dark:text-indigo-400 mr-2">{moment.timestamp}</span> : null}
+                        {moment.label}
+                      </div>
+                      {moment.note ? <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{moment.note}</p> : null}
+                    </li>
+                  ))}
                 </ul>
               </div>
             )}
           </div>
         </div>
-      ) : null}
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════
            ENHANCED ANALYSIS SECTIONS (shown when enhanced data available)
            ═══════════════════════════════════════════════════════════════ */}
-      {hasEnhancedAnalysis && scoreBreakdown && (
+      {isAdmin && hasEnhancedAnalysis && scoreBreakdown && (
         <div className="space-y-6">
           {/* ─── Enhanced Score Breakdown ─── */}
           <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
@@ -656,7 +666,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
            ═══════════════════════════════════════════════════════════════ */}
 
       {/* ─── 2. Score Overview (legacy categories) ─── */}
-      {isScored && categories && !hasEnhancedAnalysis && (
+      {isAdmin && isScored && categories && !hasEnhancedAnalysis && (
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
           <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
             <Target className="w-5 h-5 text-indigo-600" />
@@ -724,57 +734,61 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         </div>
       )}
 
-      {/* Category Scores (shown below enhanced breakdown as collapsible detail) */}
-      {isScored && categories && hasEnhancedAnalysis && (
+      {/* Category diagnostics are admin-only and collapsed by default */}
+      {isAdmin && isScored && displayModel && displayModel.categoryDiagnostics.categories.length > 0 && (
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
           <details className="group">
             <summary className="p-4 flex items-center gap-2 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 rounded-xl transition-colors">
               <ChevronDown className="w-5 h-5 text-zinc-400 transition-transform group-open:rotate-180" />
               <Target className="w-5 h-5 text-zinc-500" />
-              <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Category Scores (10 categories)</h3>
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">{displayModel.categoryDiagnostics.label}</h3>
             </summary>
             <div className="px-4 pb-4 border-t border-zinc-200 dark:border-zinc-800">
-              <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                {Object.entries(categories).map(([key, cat]) => (
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                {displayModel.categoryDiagnostics.categories.map((cat) => (
                   <div
-                    key={key}
-                    className={`rounded-lg p-4 text-center ${scoreBgColor(cat.score)}`}
+                    key={cat.key}
+                    className={`rounded-lg p-4 text-center ${scoreBgColor(cat.score ?? 0)}`}
                   >
-                    <div className={`text-2xl font-bold ${scoreColor(cat.score)}`}>
-                      {cat.score}
+                    <div className={`text-2xl font-bold ${scoreColor(cat.score ?? 0)}`}>
+                      {cat.score ?? "N/A"}
                     </div>
                     <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 leading-tight">
-                      {CATEGORY_LABELS[key] || key}
+                      {cat.name}
                     </p>
+                    {cat.weight != null && (
+                      <p className="text-[10px] text-zinc-400 mt-1">Weight {cat.weight}%</p>
+                    )}
                   </div>
                 ))}
               </div>
               <div className="mt-4 space-y-3">
-                {Object.entries(categories).map(([key, cat]) => (
+                {displayModel.categoryDiagnostics.categories.map((cat) => (
                   <div
-                    key={key}
+                    key={cat.key}
                     className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-3"
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <h4 className="font-medium text-sm">
-                        {CATEGORY_LABELS[key] || key}
-                      </h4>
-                      <span className={`text-lg font-bold ${scoreColor(cat.score)}`}>
-                        {cat.score}/10
+                      <h4 className="font-medium text-sm">{cat.name}</h4>
+                      <span className={`text-lg font-bold ${scoreColor(cat.score ?? 0)}`}>
+                        {cat.score ?? "N/A"}/{cat.maxScore}
                       </span>
                     </div>
-                    <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-2">
-                      {cat.reasoning}
-                    </p>
-                    {cat.evidence && (
-                      <blockquote className="text-xs text-zinc-500 dark:text-zinc-500 border-l-2 border-zinc-300 dark:border-zinc-600 pl-3 italic mb-2">
-                        &ldquo;{cat.evidence}&rdquo;
-                      </blockquote>
+                    {cat.reasoning && (
+                      <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-2">
+                        {cat.reasoning}
+                      </p>
                     )}
-                    {cat.improvement_tip && (
+                    {cat.evidence?.slice(0, 2).map((evidence, i) => (
+                      <blockquote key={i} className="text-xs text-zinc-500 dark:text-zinc-500 border-l-2 border-zinc-300 dark:border-zinc-600 pl-3 italic mb-2">
+                        {evidence.timestamp ? <span className="not-italic font-mono mr-1">{evidence.timestamp}</span> : null}
+                        &ldquo;{evidence.quote}&rdquo;
+                      </blockquote>
+                    ))}
+                    {cat.coaching && (
                       <p className="text-xs text-indigo-600 dark:text-indigo-400 flex items-start gap-1.5">
                         <Lightbulb className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                        {cat.improvement_tip}
+                        {cat.coaching}
                       </p>
                     )}
                   </div>
@@ -786,7 +800,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
       )}
 
       {/* ─── 3. Strengths / Weaknesses (shown when NO enhanced analysis, or always as additional) ─── */}
-      {isScored && !hasEnhancedAnalysis && (scores.strengths?.length > 0 || scores.weaknesses?.length > 0) && (
+      {isAdmin && isScored && !hasEnhancedAnalysis && (scores.strengths?.length > 0 || scores.weaknesses?.length > 0) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Strengths */}
           {scores.strengths?.length > 0 && (
@@ -833,7 +847,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
       )}
 
       {/* ─── 4. Objections (legacy fallback) ─── */}
-      {isScored && !hasEnhancedAnalysis &&
+      {isAdmin && isScored && !hasEnhancedAnalysis &&
         (scores.objections_detected?.length > 0 ||
           scores.objections_handled_well?.length > 0 ||
           scores.objections_missed?.length > 0) && (
@@ -914,7 +928,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         )}
 
       {/* ─── Objections fallback when enhanced exists but no objection_details ─── */}
-      {isScored && hasEnhancedAnalysis && (!objectionDetails || objectionDetails.length === 0) &&
+      {isAdmin && isScored && hasEnhancedAnalysis && (!objectionDetails || objectionDetails.length === 0) &&
         (scores.objections_detected?.length > 0 ||
           scores.objections_handled_well?.length > 0 ||
           scores.objections_missed?.length > 0) && (
@@ -971,7 +985,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
         )}
 
       {/* ─── 5. Next Coaching Actions (legacy fallback - shown when no enhanced) ─── */}
-      {isScored && !hasEnhancedAnalysis && scores.next_coaching_actions?.length > 0 && (
+      {isAdmin && isScored && !hasEnhancedAnalysis && scores.next_coaching_actions?.length > 0 && (
         <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-xl border border-indigo-200 dark:border-indigo-800 shadow-sm">
           <div className="p-4 border-b border-indigo-200 dark:border-indigo-800 flex items-center gap-2">
             <Wrench className="w-5 h-5 text-indigo-600" />
@@ -1005,7 +1019,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
       )}
 
       {/* ─── 5c. Enhanced Coaching (detailed weakness analysis) ─── */}
-      {isScored && (
+      {isAdmin && isScored && (
         <EnhancedCoaching
           enhancedWeaknesses={scores.enhanced_weaknesses || []}
           objectionScripts={scores.objection_scripts || []}
@@ -1016,9 +1030,9 @@ export default async function CallDetailPage({ params }: { params: { id: string 
       {/* {isScored && <FollowUpGenerator callId={call.id} />} */}
 
       {/* ─── 5e. Coaching Markers (timestamped moments) ─── */}
-      {isScored && scores.coaching_markers && (scores.coaching_markers as any[]).length > 0 && (
+      {isAdmin && isScored && scores.coaching_markers && (scores.coaching_markers as CoachingMarker[]).length > 0 && (
         <CoachingMarkers
-          markers={scores.coaching_markers as any[]}
+          markers={scores.coaching_markers as CoachingMarker[]}
           recordingUrl={
             call.share_url ||
             (call.share_token ? `https://fathom.video/share/${call.share_token}` : null) ||
@@ -1029,7 +1043,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
       )}
 
       {/* ─── 6. Summary (if available, visible) ─── */}
-      {call.summary && (
+      {isAdmin && call.summary && (
         <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm p-5">
           <div className="flex items-center gap-2 mb-3">
             <Sparkles className="w-5 h-5 text-amber-600" />
@@ -1132,7 +1146,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                   <p className="text-zinc-500 mb-2">Media Assets:</p>
                   <div className="flex flex-wrap gap-2">
                     {["embed_url", "share_url", "video_url", "recording_url"].map((key) => {
-                      const present = !!(call as any)[key];
+                      const present = !!(call as Record<string, unknown>)[key];
                       const label = key.replace("_url", "").replace("_", " ");
                       return (
                         <span
@@ -1159,7 +1173,7 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                       { label: "Summary", val: call.summary, len: call.summary?.length },
                       { label: "Scored", val: isScored, extra: isScored ? (scores.score_total ?? scores.overall_score) : null },
                       { label: "Enhanced", val: hasEnhancedAnalysis },
-                    ].map(({ label, val, len, extra }: any) => (
+                    ].map(({ label, val, len, extra }: { label: string; val: unknown; len?: number; extra?: unknown }) => (
                       <div key={label} className="flex justify-between items-center">
                         <span className="text-zinc-500 text-[10px]">{label}:</span>
                         <span
