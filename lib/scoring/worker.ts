@@ -907,7 +907,7 @@ async function writeScore(
 
 // ── Step 7: Mark completed/failed ────────────────────────────────────────────
 
-async function markCompleted(config: WorkerConfig, requestId: string, scoreId: string): Promise<void> {
+async function markCompleted(config: WorkerConfig, requestId: string, callId: string, scoreId: string): Promise<void> {
   await supabaseUpdate(
     config,
     'scoring_requests',
@@ -916,6 +916,16 @@ async function markCompleted(config: WorkerConfig, requestId: string, scoreId: s
       status: 'completed',
       score_id: scoreId,
       completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+  );
+
+  await supabaseUpdate(
+    config,
+    'calls',
+    `id=eq.${callId}`,
+    {
+      score_status: 'completed',
       updated_at: new Date().toISOString(),
     },
   );
@@ -1186,7 +1196,7 @@ export async function runWorkerCycle(options?: CycleOptions): Promise<CycleStats
 
     try {
       const scoreId = await processOne(cfg, request, spawnFn);
-      await markCompleted(cfg, request.id, scoreId);
+      await markCompleted(cfg, request.id, request.call_id, scoreId);
       stats.processed++;
       console.log(`[WORKER] ✅ Score ${scoreId} created`);
     } catch (e: any) {
