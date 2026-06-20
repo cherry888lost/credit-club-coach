@@ -443,6 +443,75 @@ export default async function CallDetailPage({ params }: { params: { id: string 
               <p className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">{displayModel.quickVerdict}</p>
             </div>
 
+            {displayModel.compactScoreBreakdown.categories.length > 0 && (
+              <div className="bg-white/80 dark:bg-zinc-900/60 rounded-xl border border-indigo-100 dark:border-indigo-900/50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                  <h4 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-white">
+                    <BarChart3 className="w-4 h-4 text-indigo-600" /> Score Breakdown
+                  </h4>
+                  <span className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">
+                    Overall: {displayModel.compactScoreBreakdown.overallScore ?? (scores.score_total ?? scores.overall_score)}/100
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  {displayModel.compactScoreBreakdown.strongestAreas.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 mb-2">Strongest areas</p>
+                      <ul className="space-y-1">
+                        {displayModel.compactScoreBreakdown.strongestAreas.map((category) => (
+                          <li key={category.key} className="text-sm text-zinc-700 dark:text-zinc-300 flex justify-between gap-3">
+                            <span>{category.name}</span>
+                            <span className="font-semibold">{category.score ?? 'N/A'}/{category.maxScore}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {displayModel.compactScoreBreakdown.lowestAreas.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400 mb-2">Lowest areas</p>
+                      <ul className="space-y-1">
+                        {displayModel.compactScoreBreakdown.lowestAreas.map((category) => (
+                          <li key={category.key} className="text-sm text-zinc-700 dark:text-zinc-300 flex justify-between gap-3">
+                            <span>{category.name}</span>
+                            <span className="font-semibold">{category.score ?? 'N/A'}/{category.maxScore}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {displayModel.compactScoreBreakdown.categories.map((category) => {
+                    const pct = category.score == null ? 0 : Math.max(0, Math.min(100, (category.score / category.maxScore) * 100));
+                    return (
+                      <div key={category.key} className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-3">
+                        <div className="flex items-start justify-between gap-3 mb-2">
+                          <div>
+                            <p className="text-sm font-medium text-zinc-900 dark:text-white">{category.name}</p>
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                              {category.weight != null ? `Weight ${category.weight}%` : 'Legacy category'}
+                              {category.weightedPoints != null ? ` • ${category.weightedPoints} pts` : ''}
+                            </p>
+                          </div>
+                          <span className={`text-sm font-bold ${scoreColor(category.score ?? 0)}`}>
+                            {category.score ?? 'N/A'}/{category.maxScore}
+                          </span>
+                        </div>
+                        <div className="h-2 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden mb-2">
+                          <div className={`h-full rounded-full ${breakdownBarColor(pct)}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        {category.reason ? <p className="text-xs text-zinc-600 dark:text-zinc-400">{category.reason}</p> : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {displayModel.wins.length > 0 && (
               <div>
                 <h4 className="flex items-center gap-2 text-sm font-semibold text-green-700 dark:text-green-400 mb-2">
@@ -500,9 +569,10 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                 </h4>
                 <div className="space-y-2">
                   {displayModel.betterScripts.map((script, i) => (
-                    <blockquote key={i} className="text-sm text-green-800 dark:text-green-200 bg-green-50 dark:bg-green-900/20 border-l-4 border-green-400 rounded-r-lg p-3">
-                      &ldquo;{script}&rdquo;
-                    </blockquote>
+                    <div key={i} className="text-sm text-green-800 dark:text-green-200 bg-green-50 dark:bg-green-900/20 border-l-4 border-green-400 rounded-r-lg p-3">
+                      <p className="font-semibold not-italic mb-1">{script.label}</p>
+                      <blockquote>&ldquo;{script.text}&rdquo;</blockquote>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -774,9 +844,9 @@ export default async function CallDetailPage({ params }: { params: { id: string 
                         {cat.score ?? "N/A"}/{cat.maxScore}
                       </span>
                     </div>
-                    {cat.reasoning && (
+                    {cat.reason && (
                       <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-2">
-                        {cat.reasoning}
+                        {cat.reason}
                       </p>
                     )}
                     {cat.evidence?.slice(0, 2).map((evidence, i) => (

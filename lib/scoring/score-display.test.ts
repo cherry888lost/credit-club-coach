@@ -3,17 +3,31 @@ import { describe, expect, it } from 'vitest';
 
 import { buildScoreDisplayModel } from './score-display';
 
-const v2Categories = Array.from({ length: 11 }, (_, index) => ({
+const v2CategoryNames = [
+  'Opening and agenda setting',
+  'Discovery and qualification',
+  'Pain and problem awareness',
+  'Solution explanation',
+  'Value building',
+  'Pitch and offer clarity',
+  'Objection handling',
+  'Closing skill',
+  'Payment / commitment / next steps',
+  'Compliance and professionalism',
+  'Communication and call control',
+];
+
+const v2Categories = v2CategoryNames.map((name, index) => ({
   category_key: `v2_category_${index + 1}`,
-  category_name: `V2 Category ${index + 1}`,
+  category_name: name,
   weight: index === 0 ? 5 : 10,
-  score: 6,
-  weighted_points: 6,
+  score: index >= 6 && index <= 8 ? 4 : index === 2 ? 5 : 6,
+  weighted_points: index === 0 ? 3 : index >= 6 && index <= 8 ? 4 : 6,
   what_happened: `V2 happened ${index + 1}`,
-  why_this_score: `V2 reason ${index + 1}`,
+  why_this_score: `V2 reason ${index + 1}. Additional sentence that should be trimmed away from the compact reason.`,
   evidence: [{ timestamp: index === 0 ? null : '01:00', speaker: 'Rep', quote: `V2 quote ${index + 1}` }],
-  coaching_feedback: `V2 coaching ${index + 1}`,
-  improved_example_phrasing: `V2 script ${index + 1}`,
+  coaching_feedback: `Fix ${name.toLowerCase()}`,
+  improved_example_phrasing: index === 0 ? 'Before we get into it, I will ask a few questions then explain the next step.' : `V2 script ${index + 1}`,
 }));
 
 const legacyCategories = {
@@ -31,7 +45,12 @@ function baseScore(overrides: Record<string, any> = {}) {
     manual_outcome: null,
     manual_close_type: null,
     coach_summary: {
-      did_well: ['Built rapport', 'Found some pain', 'Built rapport again', 'Extra win'],
+      did_well: [
+        'I do travel a lot. And what caught my attention was obviously paying for the premium...',
+        'And just by opening your cards in that order you collect points faster...',
+        'Built rapport again',
+        'Extra win',
+      ],
       needs_work: ['No clear close / next step', 'No solution explanation or value building', 'No clear close and next step'],
       action_items: ['Clearly explain the solution', 'Set a clear next step', 'Create urgency', 'Extra action'],
     },
@@ -57,7 +76,7 @@ function baseScore(overrides: Record<string, any> = {}) {
     rubric_v2: {
       rubric_version: 'v2',
       overall_score: 62,
-      rep_facing_summary: 'This was an average call. [Full transcript] The rep built rapport but no clear next step was secured.',
+      rep_facing_summary: 'This was an average call. The rep built rapport but no clear next step was secured. This extra sentence should be removed. This fourth sentence should also be removed.',
       manager_summary: 'Manager summary',
       deal_outcome: { final_outcome: 'deposit_collected', outcome_confidence: 'high' },
       category_scores: v2Categories,
@@ -93,6 +112,66 @@ function baseScore(overrides: Record<string, any> = {}) {
 }
 
 describe('score page display model', () => {
+  it('shows a compact rubric_v2 score breakdown with scores, weights, weighted points, and one-line reasons', () => {
+    const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
+
+    expect(model.compactScoreBreakdown.source).toBe('rubric_v2');
+    expect(model.compactScoreBreakdown.categories).toHaveLength(11);
+    expect(model.compactScoreBreakdown.categories[0]).toMatchObject({
+      name: 'Opening and agenda setting',
+      score: 6,
+      maxScore: 10,
+      weight: 5,
+      weightedPoints: 3,
+      reason: 'V2 reason 1.',
+    });
+    expect(model.compactScoreBreakdown.strongestAreas.map((area) => area.name)).toContain('Discovery and qualification');
+    expect(model.compactScoreBreakdown.lowestAreas.map((area) => area.name)).toEqual([
+      'Objection handling',
+      'Closing skill',
+      'Payment / commitment / next steps',
+    ]);
+  });
+
+  it('keeps compact category scores visible to non-admins without exposing detailed category cards', () => {
+    const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
+
+    expect(model.compactScoreBreakdown.categories).toHaveLength(11);
+    expect(model.categoryDiagnostics.categories).toHaveLength(0);
+    expect(JSON.stringify(model.compactScoreBreakdown)).not.toContain('V2 quote');
+  });
+
+  it('limits quick verdict to three sentences', () => {
+    const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
+
+    expect(model.quickVerdict).toBe('This was an average call. The rep built rapport but no clear next step was secured. This extra sentence should be removed.');
+    expect(model.quickVerdict.split('.').filter(Boolean)).toHaveLength(3);
+  });
+
+  it('summarizes wins instead of showing long raw transcript chunks', () => {
+    const model = buildScoreDisplayModel(baseScore({ rubric_v2: null }), { isAdmin: false });
+
+    expect(model.wins).toContain('Connected the conversation to the prospect’s travel goals.');
+    expect(model.wins).toContain('Explained card sequencing and points accumulation clearly.');
+    expect(model.wins.join(' ')).not.toContain('what caught my attention');
+  });
+
+  it('labels better scripts and removes empty script boxes', () => {
+    const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
+
+    expect(model.betterScripts.every((script) => script.text.trim().length > 0)).toBe(true);
+    expect(model.betterScripts[0]).toMatchObject({ label: 'Objection isolation script' });
+    expect(JSON.stringify(model.betterScripts)).not.toContain('""');
+  });
+
+  it('uses compact legacy score breakdown when rubric_v2 is null and does not mix sources', () => {
+    const model = buildScoreDisplayModel(baseScore({ rubric_v2: null }), { isAdmin: false });
+
+    expect(model.compactScoreBreakdown.source).toBe('legacy');
+    expect(model.compactScoreBreakdown.categories.map((category) => category.name)).toEqual(['Call Control', 'Rapport & Tone']);
+    expect(model.compactScoreBreakdown.categories[0]).toMatchObject({ score: 4, maxScore: 10, weight: null, weightedPoints: null });
+  });
+
   it('hides admin diagnostics and full category cards from non-admin closers', () => {
     const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
 
@@ -114,7 +193,7 @@ describe('score page display model', () => {
   it('prefers rubric_v2 category data and does not mix legacy categories when v2 exists', () => {
     const model = buildScoreDisplayModel(baseScore(), { isAdmin: true });
 
-    expect(model.categoryDiagnostics.categories.map((category) => category.name)).toContain('V2 Category 1');
+    expect(model.categoryDiagnostics.categories.map((category) => category.name)).toContain('Opening and agenda setting');
     expect(model.categoryDiagnostics.categories.map((category) => category.name)).not.toContain('Call Control');
   });
 
@@ -142,7 +221,7 @@ describe('score page display model', () => {
     const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
     const serialized = JSON.stringify(model);
 
-    expect(model.betterScripts.every((script) => script.trim().length > 0)).toBe(true);
+    expect(model.betterScripts.every((script) => script.text.trim().length > 0)).toBe(true);
     expect(serialized).not.toContain('[Full transcript]');
     expect(serialized).not.toContain('"timestamp":"null"');
     expect(serialized).not.toContain('null timestamp hidden');
