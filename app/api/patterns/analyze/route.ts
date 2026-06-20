@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { auth } from "@clerk/nextjs/server";
 import { getDefaultOrgId } from "@/lib/auth";
+import { requireAdminApi } from "@/lib/auth/admin-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,10 +15,8 @@ export const dynamic = "force-dynamic";
  * Body: { call_id: string } or { transcript: string, outcome: string, close_type?: string }
  */
 export async function POST(request: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const admin = await requireAdminApi();
+  if (admin.response) return admin.response;
 
   const body = await request.json();
 
@@ -48,7 +46,8 @@ export async function POST(request: NextRequest) {
 
       transcript = call.transcript;
       callId = call.id;
-      repName = (call.reps as any)?.name || null;
+      const reps = call.reps as { name?: string } | { name?: string }[] | null;
+      repName = Array.isArray(reps) ? reps[0]?.name || null : reps?.name || null;
       callDate = call.occurred_at;
 
       // Get score data
@@ -160,10 +159,11 @@ export async function POST(request: NextRequest) {
       patterns,
     });
 
-  } catch (err: any) {
+  } catch (err) {
     console.error("[PATTERNS] Error:", err);
+    const message = err instanceof Error ? err.message : "Internal server error";
     return NextResponse.json(
-      { error: "Internal server error", details: err.message },
+      { error: "Internal server error", details: message },
       { status: 500 }
     );
   }

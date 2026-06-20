@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
-import { auth } from '@clerk/nextjs/server';
+import { requireAdminApi } from '@/lib/auth/admin-api';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -10,11 +10,9 @@ export const dynamic = 'force-dynamic';
  *
  * Get counts by status for the learning queue.
  */
-export async function GET(request: NextRequest) {
-  const { userId } = await auth();
-  if (!userId && !(process.env.NODE_ENV === 'development' && process.env.DEV_AUTH_BYPASS === '1')) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+export async function GET() {
+  const admin = await requireAdminApi();
+  if (admin.response) return admin.response;
 
   const supabase = await createServiceClient();
 

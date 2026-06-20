@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import { requireAuth } from "@/lib/auth";
+import { requireAdminApi } from "@/lib/auth/admin-api";
 
 export async function GET() {
-  try { await requireAuth(); } catch { return NextResponse.json({ error: "Unauthorized" }, { status: 401 }); }
+  const admin = await requireAdminApi();
+  if (admin.response) return admin.response;
   const supabase = createServiceClient();
 
   // Count patterns by category
