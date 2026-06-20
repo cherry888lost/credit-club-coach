@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
-import { auth } from '@clerk/nextjs/server';
+import { requireAdminApi } from '@/lib/auth/admin-api';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,10 +12,8 @@ export const dynamic = 'force-dynamic';
  * Query params: status, category, limit, offset
  */
 export async function GET(request: NextRequest) {
-  const { userId } = await auth();
-  if (!userId && !(process.env.NODE_ENV === 'development' && process.env.DEV_AUTH_BYPASS === '1')) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const admin = await requireAdminApi();
+  if (admin.response) return admin.response;
 
   const { searchParams } = new URL(request.url);
   const rawStatus = searchParams.get('status') || 'pending_review';

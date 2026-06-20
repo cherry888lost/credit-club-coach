@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
-import { auth } from '@clerk/nextjs/server';
+import { requireAdminApi } from '@/lib/auth/admin-api';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,8 +12,8 @@ export const dynamic = 'force-dynamic';
  * Query params: quality_rating, outcome, tag, rep, limit, offset
  */
 export async function GET(request: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const admin = await requireAdminApi();
+  if (admin.response) return admin.response;
 
   const { searchParams } = new URL(request.url);
   const quality = searchParams.get('quality_rating');
@@ -51,8 +51,9 @@ export async function GET(request: NextRequest) {
  * Manually add a call to the benchmark library.
  */
 export async function POST(request: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const admin = await requireAdminApi();
+  if (admin.response) return admin.response;
+  const userId = admin.user.userId;
 
   const body = await request.json();
   const supabase = await createServiceClient();

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { auth } from "@clerk/nextjs/server";
-import { getCurrentUser, getDefaultOrgId } from "@/lib/auth";
+import { getDefaultOrgId } from "@/lib/auth";
+import { requireAdminApi } from "@/lib/auth/admin-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,10 +11,8 @@ export const dynamic = "force-dynamic";
  * List winning call patterns for the org.
  */
 export async function GET(request: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const admin = await requireAdminApi();
+  if (admin.response) return admin.response;
 
   try {
     const supabase = await createServiceClient();
@@ -42,7 +40,8 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({ patterns: data || [] });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Internal server error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

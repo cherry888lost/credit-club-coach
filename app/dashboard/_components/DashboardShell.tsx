@@ -11,9 +11,7 @@ import {
   Settings,
   Menu,
   X,
-  Brain,
   Upload,
-  BookOpen,
   WalletCards
 } from "lucide-react";
 import { useState, useCallback } from "react";
@@ -25,8 +23,6 @@ const navigation = [
   { name: "Calls", href: "/dashboard/calls", icon: Phone, adminOnly: false },
   { name: "Reps", href: "/dashboard/reps", icon: Users, adminOnly: false },
   { name: "Analysis", href: "/dashboard/analysis", icon: BarChart3, adminOnly: true },
-  { name: "Learning Queue", href: "/dashboard/learning-queue", icon: Brain, adminOnly: true },
-  { name: "Pattern Library", href: "/dashboard/patterns", icon: BookOpen, adminOnly: true },
   { name: "Import Calls", href: "/dashboard/import-calls", icon: Upload, adminOnly: true },
   { name: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: false },
   { name: "Collections", href: "/dashboard/collections", icon: WalletCards, adminOnly: false },

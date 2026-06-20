@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
-import { auth } from '@clerk/nextjs/server';
+import { requireAdminApi } from '@/lib/auth/admin-api';
 import { approvePattern, rejectPattern, promoteToBenchmark, updateObjectionFromPattern } from '@/lib/scoring/controlled-learning';
 
 export const runtime = 'nodejs';
@@ -16,8 +16,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const admin = await requireAdminApi();
+  if (admin.response) return admin.response;
+  const userId = admin.user.userId;
 
   const { id: patternId } = await params;
   const body = await request.json();
