@@ -13,6 +13,7 @@ import { TechniqueBadge } from "@/components/ui/TechniqueBadge";
 import { CoachingFeedback } from "@/components/ui/CoachingFeedback";
 import { KeyQuotes } from "@/components/ui/KeyQuotes";
 import { buildScoreDisplayModel } from "@/lib/scoring/score-display";
+import { selectLatestDisplayScore } from "@/lib/scoring/select-latest-score";
 import {
   ArrowLeft,
   User,
@@ -181,8 +182,10 @@ export default async function CallDetailPage({ params }: { params: { id: string 
     .single();
 
   const isFlagged = !!flag;
-  // call_scores is returned as an array from the join; take first if array
-  const scores = Array.isArray(call.call_scores) ? call.call_scores[0] : call.call_scores;
+  // A call can have multiple completed score rows after controlled rescoring.
+  // Supabase relation order is not guaranteed, so explicitly choose the latest
+  // displayable score instead of taking call_scores[0].
+  const scores = selectLatestDisplayScore(call.call_scores);
   const isScored = scores?.score_total != null;
   // Detect broken scores from old worker (null score_total with low_signal model)
   const hasBrokenScore = scores && !isScored;
