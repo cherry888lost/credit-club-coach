@@ -81,7 +81,7 @@ export function buildScoreDisplayModel(scoreRow: any, options: { isAdmin: boolea
     scoreRow?.summary,
     scoreRow?.call_summary,
     rubricV2?.manager_summary,
-  ]) || buildFallbackVerdict(scoreRow), scoreRow, rubricV2);
+  ]) || buildFallbackVerdict(scoreRow), scoreRow, rubricV2, compactScoreBreakdown);
 
   const wins = takeUniqueAdvice([
     ...asArray(rubricV2?.best_moments).map(momentText),
@@ -96,13 +96,15 @@ export function buildScoreDisplayModel(scoreRow: any, options: { isAdmin: boolea
   ], 3, usedTopics, categoryAdvice);
 
   const missedOpportunities = takeUniqueAdvice([
+    ...outcomeGapMissedOpportunities(rubricV2, compactScoreBreakdown),
     ...asArray(rubricV2?.missed_opportunities).map(missedText),
     ...asArray(scoreRow?.coach_summary?.needs_work),
     ...asArray(scoreRow?.weaknesses),
     ...asArray(scoreRow?.missed_opportunities).map(missedText),
-  ], 3, usedTopics, categoryAdvice);
+  ], 3, usedTopics, []);
 
   const betterScripts = buildBetterScripts([
+    ...outcomeGapScripts(rubricV2),
     ...asArray(scoreRow?.objection_scripts),
     ...compactScoreBreakdown.categories.map((category) => ({ improved_example_phrasing: category.improvedScript })),
   ], 3);
@@ -297,6 +299,9 @@ function cleanText(value: unknown): string {
     .replace(/\bno offer or pric(?:e|ing) (?:was )?discussed(?: yet)?\b/gi, '')
     .replace(/\bthe rep has not yet explained the solution or how it connects to the prospect'?s situation\b/gi, '')
     .replace(/\bno close attempt(?: made)?\b/gi, '')
+    .replace(/\bno closing or next steps arranged\b/gi, '')
+    .replace(/\balways attempt to close or schedule next steps to maintain momentum\b/gi, 'Confirm payment and onboarding next steps more clearly')
+    .replace(/\bclose the customer before ending the call\b/gi, 'confirm the customer commitment and onboarding next step before ending the call')
     .replace(/\bclosing not attempted(?: yet)?\b/gi, '')
     .replace(/\bno closing behavior (?:present|observed)\b/gi, '')
     .replace(/\bno closing skill demonstrated(?: yet)?\b/gi, '')
@@ -322,6 +327,18 @@ function oneLineReason(value: unknown): string {
 
 function summarizeRawTranscriptSnippet(value: string): string {
   const lower = value.toLowerCase();
+  if (/good or bad credit|credit\?\s*let.?s start there/.test(lower)) {
+    return 'Opened discovery by asking directly about the prospect’s credit position.';
+  }
+  if (lower.includes("i'm pretty easy") || lower.includes('tell me what you') || lower.includes('what you need help with')) {
+    return 'Built rapport by keeping the tone relaxed and inviting the prospect to explain what they needed.';
+  }
+  if (lower.includes('business') && lower.includes('economy')) {
+    return 'Connected the programme to the prospect’s travel goals and desire for business-class flights.';
+  }
+  if (lower.includes('unlimited flights') || lower.includes('realistic') || lower.includes('impossible')) {
+    return 'Built trust by setting realistic expectations instead of overpromising.';
+  }
   if (lower.includes('travel') && lower.includes('caught my attention')) {
     return 'Connected the conversation to the prospect’s travel goals.';
   }
@@ -343,7 +360,12 @@ function summarizeRawTranscriptSnippet(value: string): string {
   return value;
 }
 
-function buildQuickVerdict(base: string, scoreRow: any, rubricV2: any): string {
+function buildQuickVerdict(base: string, scoreRow: any, rubricV2: any, compactScoreBreakdown?: CompactScoreBreakdown): string {
+  if (rubricV2 && compactScoreBreakdown?.source === 'rubric_v2') {
+    const structured = buildStructuredV2Verdict(scoreRow, rubricV2, compactScoreBreakdown);
+    if (structured) return structured;
+  }
+
   const outcome = buildOutcomeDisplay(scoreRow, rubricV2).primaryLabel;
   const sentences: string[] = [];
   if (outcome) sentences.push(outcome.replace(/^AI Outcome: /, '').replace(/^Manager Outcome: /, '') + '.');
@@ -358,6 +380,78 @@ function buildQuickVerdict(base: string, scoreRow: any, rubricV2: any): string {
   sentences.push('The main improvement is to make the next call more structured and easier for the prospect to commit to.');
   const unique = takeUniqueSentences(sentences);
   return unique.slice(0, 6).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function buildStructuredV2Verdict(scoreRow: any, rubricV2: any, compactScoreBreakdown: CompactScoreBreakdown): string {
+  const score = numericOrNull(scoreRow?.score_total ?? scoreRow?.overall_score ?? rubricV2?.overall_score);
+  const outcomeLabel = buildOutcomeDisplay(scoreRow, rubricV2).primaryLabel?.replace(/^AI Outcome: /, '').replace(/^Manager Outcome: /, '') || 'Call outcome recorded';
+  const closed = /closed|deposit|payment|partial access/i.test(outcomeLabel);
+  const strongest = compactScoreBreakdown.strongestAreas
+    .map((area) => area.name.toLowerCase())
+    .filter((name) => !/compliance/.test(name))
+    .slice(0, 2);
+  const weakest = compactScoreBreakdown.lowestAreas.map((area) => area.name.toLowerCase()).slice(0, 3);
+  const missed = asArray(rubricV2?.missed_opportunities).map(missedText).filter(Boolean).slice(0, 2);
+  const action = firstClean(asArray(rubricV2?.top_3_coaching_actions).map(actionText));
+  const scoreBand = score != null && score < 70 ? 'score stayed mid-range' : 'score reflects the overall sales process';
+
+  const sentences = [
+    closed
+      ? `This call resulted in ${outcomePhrase(outcomeLabel)}, which is a positive outcome.`
+      : `This call ended as ${outcomeLabel.toLowerCase()}.`,
+    strongest.length
+      ? `The rep showed strengths in ${humanList(strongest)}.`
+      : 'The rep had some useful moments during the conversation.',
+    weakest.length
+      ? `The ${scoreBand} because the call still needed stronger ${humanList(weakest)}.`
+      : `The ${scoreBand} because there were still process gaps to tighten.`,
+    missed.length
+      ? `The biggest gaps were ${managerGapList(missed.map(managerStyleGapText))}.`
+      : 'The main gaps were structure, discovery depth, and clearer value before payment.',
+    action
+      ? `Next time, ${lowercaseFirst(action.replace(/[.!?]+$/, ''))}.`
+      : 'Next time, set the agenda upfront, qualify motivation and affordability more deeply, then explain the offer and next steps before asking for payment.',
+  ];
+
+  return takeUniqueSentences(sentences).slice(0, 6).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function managerGapList(values: string[]): string {
+  const cleaned = values.map((value) => value.trim()).filter(Boolean);
+  if (cleaned.length <= 1) return cleaned[0] || '';
+  if (cleaned.length === 2) return `${cleaned[0]}, plus ${cleaned[1]}`;
+  return `${cleaned.slice(0, -1).join(', ')}, plus ${cleaned[cleaned.length - 1]}`;
+}
+
+function managerStyleGapText(value: string): string {
+  const text = value.replace(/^[Nn]o /, '').toLowerCase().trim();
+  if (/deep discovery.*goals.*motivation.*missing|discovery.*goals.*motivation/.test(text)) {
+    return 'shallow discovery around goals and motivation';
+  }
+  if (/solution\/value clarity gap|solution.*value.*clarity|unclear solution/.test(text)) {
+    return 'unclear solution and value framing';
+  }
+  if (/agenda|call structure/.test(text)) return 'unclear agenda and call structure';
+  if (/payment|onboarding|next step/.test(text)) return 'unclear payment and onboarding confirmation';
+  return text;
+}
+
+function outcomePhrase(label: string): string {
+  if (/partial access/i.test(label)) return 'a Partial Access close';
+  if (/deposit/i.test(label)) return 'a deposit-collected outcome';
+  if (/payment/i.test(label)) return 'a payment-collected outcome';
+  return `a ${label.replace(/ closed$/i, '')} close`;
+}
+
+function humanList(values: string[]): string {
+  const cleaned = values.map((value) => value.trim()).filter(Boolean);
+  if (cleaned.length <= 1) return cleaned[0] || '';
+  if (cleaned.length === 2) return `${cleaned[0]} and ${cleaned[1]}`;
+  return `${cleaned.slice(0, -1).join(', ')}, and ${cleaned[cleaned.length - 1]}`;
+}
+
+function lowercaseFirst(value: string): string {
+  return value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
 }
 
 function splitSentences(text: string): string[] {
@@ -433,6 +527,37 @@ function scriptText(item: unknown): string {
   return firstClean([record.better_response, record.better_script, record.improved_example_phrasing]);
 }
 
+function outcomeGapMissedOpportunities(rubricV2: any, compactScoreBreakdown: CompactScoreBreakdown): string[] {
+  const outcome = cleanText(rubricV2?.deal_outcome?.final_outcome || rubricV2?.final_outcome);
+  if (outcome !== 'partial_access' && outcome !== 'deposit_collected' && outcome !== 'payment_collected' && outcome !== 'payment_plan_arranged') {
+    return [];
+  }
+  const lowKeys = new Set(compactScoreBreakdown.lowestAreas.map((area) => area.key));
+  const gaps = [
+    'No clear upfront agenda or call structure was set before discovery.',
+    'Discovery did not go deep enough into motivation, urgency, and affordability.',
+  ];
+  if (lowKeys.has('pitch_offer_clarity') || lowKeys.has('value_building') || lowKeys.has('solution_explanation')) {
+    gaps.push('Value, offer details, and onboarding expectations could have been clearer before payment.');
+  }
+  if (lowKeys.has('objection_handling')) {
+    gaps.push('Objection isolation could have been more structured before moving into the close.');
+  }
+  return gaps.slice(0, 3);
+}
+
+function outcomeGapScripts(rubricV2: any): Array<{ better_script: string }> {
+  const outcome = cleanText(rubricV2?.deal_outcome?.final_outcome || rubricV2?.final_outcome);
+  if (outcome !== 'partial_access' && outcome !== 'deposit_collected' && outcome !== 'payment_collected' && outcome !== 'payment_plan_arranged') {
+    return [];
+  }
+  return [
+    { better_script: 'Before we get into pricing, I’ll ask a few questions about your credit and travel goals, then I’ll explain exactly how the programme works and what the next step would be if it makes sense.' },
+    { better_script: 'What is the main thing you want your credit to help you achieve — more approvals, business cards, travel points, or removing specific blockers?' },
+    { better_script: 'We can get you started today on Partial Access for £500, then I’ll confirm the next payment, onboarding step, and what you’ll receive immediately after joining.' },
+  ];
+}
+
 function buildBetterScripts(items: unknown[], limit: number): BetterScriptDisplay[] {
   const used = new Set<string>();
   const scripts: BetterScriptDisplay[] = [];
@@ -456,7 +581,7 @@ function scriptLabel(item: unknown, text: string): string {
   if (/objection|holding you back|think|expensive|money|confidence|timing|reason you prefer/.test(combined)) return 'Objection isolation script';
   if (/deposit|secure your place|£500|500/.test(combined)) return 'Deposit close script';
   if (/next step|book|follow.?up|commitment/.test(combined)) return 'Next-step script';
-  if (/main goals|credit score|how soon|comfortable with the investment|discovery/.test(combined)) return 'Discovery script';
+  if (/main goals|main thing you want|credit score|how soon|comfortable with the investment|discovery/.test(combined)) return 'Discovery script';
   if (/value|programme|program|benefit|offer|card sequencing|points/.test(combined)) return 'Value explanation script';
   return 'Better script';
 }

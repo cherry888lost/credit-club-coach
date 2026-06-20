@@ -223,11 +223,20 @@ describe('Credit Club scoring rubric v2', () => {
         return { ...category, why_this_score: 'No payment or commitment observed.', coaching_feedback: 'Secure a deposit.' };
       }
       if (category.category_key === 'pitch_offer_clarity') {
-        return { ...category, why_this_score: 'Offer and price not discussed yet.' };
+        return { ...category, why_this_score: 'Offer and price not discussed yet.', what_happened: 'No pitch or offer was presented in this transcript segment.' };
+      }
+      if (category.category_key === 'value_building') {
+        return { ...category, score: 7, why_this_score: 'The rep did not build value before discussing price or benefits.', what_happened: 'No value stacking or benefits explanation was observed in this transcript segment.' };
+      }
+      if (category.category_key === 'solution_explanation') {
+        return { ...category, score: 7, why_this_score: 'Solution was not yet presented in this transcript segment.', what_happened: 'No solution explanation observed yet.' };
       }
       return category;
     });
-    raw.missed_opportunities = [{ issue: 'No close attempt made', coaching_feedback: 'Ask for the close.' }];
+    raw.missed_opportunities = [
+      { issue: 'No close attempt made', coaching_feedback: 'Ask for the close.' },
+      { issue: 'No closing or next steps arranged', coaching_feedback: 'Create a decision point.' },
+    ];
     raw.top_3_coaching_actions = [{ action: 'Close the customer before ending the call.' }];
 
     const transcript = `
@@ -255,12 +264,31 @@ describe('Credit Club scoring rubric v2', () => {
     expect(legacy.outcome).toBe('closed');
     expect(legacy.close_type).toBe('partial_access');
     expect(allFeedback).not.toContain('no close attempt');
+    expect(allFeedback).not.toContain('no closing or next steps arranged');
     expect(allFeedback).not.toContain('no closing skill observed');
     expect(allFeedback).not.toContain('no evidence of payment');
     expect(allFeedback).not.toContain('no payment or commitment observed');
     expect(allFeedback).not.toContain('no payment or commitment activity observed');
     expect(allFeedback).not.toContain('closing skill was not demonstrated');
     expect(allFeedback).not.toContain('pitch and offer clarity was not present');
+    expect(allFeedback).not.toContain('no pitch or offer was presented');
+    expect(allFeedback).not.toContain('offer and price not discussed');
+    expect(allFeedback).not.toContain('did not build value');
+    expect(allFeedback).not.toContain('no value built');
+    expect(allFeedback).not.toContain('solution was not yet presented');
+    expect(allFeedback).not.toContain('no solution explanation observed');
+
+    const valueBuilding = result.category_scores.find((c) => c.category_key === 'value_building');
+    const solution = result.category_scores.find((c) => c.category_key === 'solution_explanation');
+    const pitch = result.category_scores.find((c) => c.category_key === 'pitch_offer_clarity');
+    const payment = result.category_scores.find((c) => c.category_key === 'payment_commitment_next_steps');
+
+    expect(valueBuilding?.score).toBeGreaterThanOrEqual(6);
+    expect(valueBuilding?.why_this_score).toContain('Some value was built');
+    expect(solution?.score).toBeGreaterThanOrEqual(6);
+    expect(solution?.why_this_score).toContain('explained parts of the solution');
+    expect(pitch?.why_this_score).toContain('Partial Access and the £500 option were discussed');
+    expect(payment?.what_happened).toContain('Partial Access payment');
   });
 
   it('does not regress no-sale calls into closed outcomes without close evidence', () => {

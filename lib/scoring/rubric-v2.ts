@@ -443,30 +443,71 @@ function sanitizeOutcomeEvidenceForOutcome(evidence: DealOutcomeEvidence[], fina
 
 function applyOutcomeCategoryCorrections(categories: unknown[], outcome: RubricV2DealOutcome): RubricV2CategoryInput[] {
   if (!Array.isArray(categories)) return [];
-  if (!isClosedOutcome(outcome.final_outcome)) return categories as RubricV2CategoryInput[];
+  const closedOutcome = isClosedOutcome(outcome.final_outcome);
 
   return categories.map((category: any) => {
     if (!category || typeof category !== 'object') return category;
-    if (category.category_key === 'closing_skill') {
-      return rewriteOutcomeAwareCategory(category, 6, 'The rep did make a close attempt and secured a commitment; score the cleanliness and control of the close, not whether a close happened.');
+    const score = clampCategoryScore(category.score);
+
+    if (closedOutcome && category.category_key === 'closing_skill') {
+      return rewriteOutcomeAwareCategory(category, 6, {
+        why_this_score: 'The rep did move the prospect into a Partial Access commitment, but the close lacked structure, objection isolation, and a clean confirmation of next steps.',
+        what_happened: 'The rep moved the prospect toward a Partial Access commitment and payment, but the close could have been cleaner and more structured.',
+        coaching_feedback: 'Make the close cleaner by isolating any final concern, confirming the exact payment, and stating the next onboarding step clearly.',
+      });
     }
-    if (category.category_key === 'payment_commitment_next_steps') {
-      return rewriteOutcomeAwareCategory(category, outcome.final_outcome === 'partial_access' ? 7 : 6, 'Payment, deposit, partial access, or a clear commitment was observed; score how clearly the payment and next step were confirmed.');
+
+    if (closedOutcome && category.category_key === 'payment_commitment_next_steps') {
+      return rewriteOutcomeAwareCategory(category, outcome.final_outcome === 'partial_access' ? 7 : 6, {
+        why_this_score: 'Partial Access payment was initiated or secured and onboarding began, but the rep should confirm payment status, support-chat setup, and next action more cleanly.',
+        what_happened: 'Partial Access payment and onboarding steps were started, but the next step and expectations were not confirmed as cleanly as they could have been.',
+        coaching_feedback: 'After payment, confirm what has been paid, what happens next, who will support the member, and when the next action will happen.',
+      });
     }
-    if ((category.category_key === 'pitch_offer_clarity' || category.category_key === 'solution_explanation') && (outcome.offer_pitched || outcome.price_discussed)) {
-      return rewriteOutcomeAwareCategory(category, 5, 'The offer and pricing were discussed; score how clearly the value, terms, and next steps were explained.');
+
+    if (closedOutcome && category.category_key === 'pitch_offer_clarity' && (outcome.offer_pitched || outcome.price_discussed)) {
+      return rewriteOutcomeAwareCategory(category, 5, {
+        why_this_score: 'Partial Access and the £500 option were discussed, but the full offer, deliverables, remaining balance, and onboarding expectations were not explained clearly enough.',
+        what_happened: 'The rep presented Partial Access and the £500 option, but the full programme offer and next-step expectations needed more structure.',
+        coaching_feedback: 'Present the full offer, what the prospect receives, the remaining balance, and the onboarding steps before asking for payment.',
+      });
     }
+
+    if (closedOutcome && category.category_key === 'solution_explanation' && (outcome.offer_pitched || outcome.price_discussed || score >= 6)) {
+      return rewriteOutcomeAwareCategory(category, Math.min(score, 5), {
+        why_this_score: 'The rep explained parts of the solution and credit/travel benefit, but the full programme process and after-signup steps could have been clearer.',
+        what_happened: 'The rep explained the card and points strategy, but did not fully structure the programme process, deliverables, and after-signup steps.',
+        coaching_feedback: 'Explain the step-by-step programme journey: what happens after joining, what support is included, and how the prospect gets from payment to results.',
+      });
+    }
+
+    if (category.category_key === 'value_building' && score >= 6) {
+      return rewriteOutcomeAwareCategory(category, score, {
+        why_this_score: 'Some value was built around business-class travel, card sequencing, points, and the business Amex opportunity, but the rep did not stack the full programme value clearly before moving to payment.',
+        what_happened: 'The rep connected the offer to travel outcomes, points, and business card benefits, but did not fully stack programme value before payment.',
+        coaching_feedback: 'Stack the full value before price: software, support, credit guidance, community, card sequencing, points strategy, and expected next steps.',
+      });
+    }
+
+    if (category.category_key === 'solution_explanation' && score >= 6) {
+      return rewriteOutcomeAwareCategory(category, score, {
+        why_this_score: 'The rep explained parts of the solution and credit/travel benefit, but the full programme process and after-signup steps could have been clearer.',
+        what_happened: 'The rep explained parts of the card and points strategy, but the full programme process needed clearer structure.',
+        coaching_feedback: 'Explain exactly what happens after signup, what support is included, and how the strategy will be implemented.',
+      });
+    }
+
     return category;
   }) as RubricV2CategoryInput[];
 }
 
-function rewriteOutcomeAwareCategory(category: any, minScore: number, replacementReason: string): any {
+function rewriteOutcomeAwareCategory(category: any, minScore: number, replacements: { why_this_score: string; what_happened: string; coaching_feedback: string }): any {
   return {
     ...category,
     score: Math.max(clampCategoryScore(category.score), minScore),
-    why_this_score: outcomeAwareReplacement(category.why_this_score, replacementReason),
-    what_happened: outcomeAwareReplacement(category.what_happened, replacementReason),
-    coaching_feedback: outcomeAwareReplacement(category.coaching_feedback, 'Coach the rep to make the close cleaner, confirm payment status, and state the next step explicitly.'),
+    why_this_score: replacements.why_this_score,
+    what_happened: replacements.what_happened,
+    coaching_feedback: replacements.coaching_feedback,
   };
 }
 
@@ -498,19 +539,6 @@ function filterContradictoryCloseAdvice(values: unknown, outcome: RubricV2DealOu
     .filter((item) => JSON.stringify(item).replace(/[{}\[\]",:]/g, '').trim().length > 0);
 }
 
-function outcomeAwareReplacement(value: unknown, fallback: string): string {
-  const cleaned = removeContradictoryCloseLanguage(value)
-    .split('|')
-    .map((part) => part.replace(/^[\s.]+|[\s.]+$/g, '').trim())
-    .filter((part) => part.length > 8)
-    .filter((part) => !/^(to evaluate|yet|present)$/i.test(part))
-    .filter((part) => !/not yet discussed|has not yet explained|no .* observed|not present/i.test(part))
-    .join(' | ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return cleaned || fallback;
-}
-
 function removeContradictoryCloseLanguage(value: unknown): string {
   if (typeof value !== 'string') return '';
   const cleaned = value
@@ -524,6 +552,9 @@ function removeContradictoryCloseLanguage(value: unknown): string {
     .replace(/\bno offer or pric(?:e|ing) (?:was )?discussed(?: yet)?\b/gi, '')
     .replace(/\bthe rep has not yet explained the solution or how it connects to the prospect'?s situation\b/gi, '')
     .replace(/\bno close attempt(?: made)?\b/gi, '')
+    .replace(/\bno closing or next steps arranged\b/gi, '')
+    .replace(/\balways attempt to close or schedule next steps to maintain momentum\b/gi, 'Confirm payment and onboarding next steps more clearly')
+    .replace(/\bclose the customer before ending the call\b/gi, 'confirm the customer commitment and onboarding next step before ending the call')
     .replace(/\bclosing not attempted(?: yet)?\b/gi, '')
     .replace(/\bno closing behavior (?:present|observed)\b/gi, '')
     .replace(/\bno closing skill demonstrated(?: yet)?\b/gi, '')

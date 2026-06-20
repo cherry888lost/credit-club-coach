@@ -144,8 +144,9 @@ describe('score page display model', () => {
   it('limits quick verdict to six useful sentences and keeps key moments out of the simple view', () => {
     const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
 
-    expect(model.quickVerdict).toBe('Deposit Collected. This was an average call. The rep built rapport but no clear next step was secured. This extra sentence should be removed. This fourth sentence should also be removed. The main improvement is to make the next call more structured and easier for the prospect to commit to.');
-    expect(model.quickVerdict.split('.').filter(Boolean)).toHaveLength(6);
+    expect(model.quickVerdict).toContain('deposit-collected outcome');
+    expect(model.quickVerdict).toContain('score stayed mid-range');
+    expect(model.quickVerdict.split('.').filter(Boolean)).toHaveLength(5);
     expect(model.showKeyMomentsInSimpleView).toBe(false);
     expect(model.adminDiagnostics?.keyMomentsAvailable).toBeUndefined();
   });
@@ -158,11 +159,62 @@ describe('score page display model', () => {
     expect(model.wins.join(' ')).not.toContain('what caught my attention');
   });
 
+  it('turns rubric_v2 best moment quotes into coaching summaries for closers', () => {
+    const model = buildScoreDisplayModel(baseScore({
+      rubric_v2: {
+        ...baseScore().rubric_v2,
+        deal_outcome: { final_outcome: 'partial_access', outcome_confidence: 'high' },
+        best_moments: [
+          { quote: 'Have you got good or bad credit? Let’s start there.' },
+          { quote: "Yeah, once you go business, it's hard to go back to economy, isn't It was." },
+          { quote: "Okay, lovely. Perfect. So one thing I'm very honest and upfront with everyone, we can't get you unlimited flights." },
+        ],
+      },
+    }), { isAdmin: false });
+
+    expect(model.wins).toEqual([
+      'Opened discovery by asking directly about the prospect’s credit position.',
+      'Connected the programme to the prospect’s travel goals and desire for business-class flights.',
+      'Built trust by setting realistic expectations instead of overpromising.',
+    ]);
+  });
+
+  it('builds a structured v2 quick verdict instead of using stale chunk summaries', () => {
+    const model = buildScoreDisplayModel(baseScore({
+      score_total: 60,
+      rubric_v2: {
+        ...baseScore().rubric_v2,
+        overall_score: 60,
+        rep_facing_summary: 'No offer or closing attempts were observed in this transcript segment. This stale chunk summary should not drive the verdict.',
+        deal_outcome: { final_outcome: 'partial_access', outcome_confidence: 'high' },
+        category_scores: v2Categories.map((category) => category.category_name === 'Objection handling'
+          ? { ...category, score: 3, why_this_score: 'Weak objection isolation.' }
+          : category),
+        missed_opportunities: [
+          { issue: 'No explicit agenda setting or call structure introduction' },
+          { issue: 'Limited probing on motivation, urgency, and affordability' },
+        ],
+        top_3_coaching_actions: [{ action: 'Set the agenda upfront and explain the next step clearly.' }],
+      },
+    }), { isAdmin: false });
+
+    expect(model.quickVerdict).toContain('Partial Access close');
+    expect(model.quickVerdict).toContain('score stayed mid-range');
+    expect(model.quickVerdict).toContain('Next time');
+    expect(model.quickVerdict.toLowerCase()).not.toContain('no offer or closing attempts');
+    expect(model.quickVerdict.split('.').filter(Boolean).length).toBeGreaterThanOrEqual(4);
+    expect(model.quickVerdict.split('.').filter(Boolean).length).toBeLessThanOrEqual(6);
+  });
+
   it('labels better scripts and removes empty script boxes', () => {
     const model = buildScoreDisplayModel(baseScore(), { isAdmin: false });
 
     expect(model.betterScripts.every((script) => script.text.trim().length > 0)).toBe(true);
-    expect(model.betterScripts[0]).toMatchObject({ label: 'Objection isolation script' });
+    expect(model.betterScripts.map((script) => script.label)).toEqual([
+      'Agenda script',
+      'Discovery script',
+      'Deposit close script',
+    ]);
     expect(JSON.stringify(model.betterScripts)).not.toContain('""');
   });
 
