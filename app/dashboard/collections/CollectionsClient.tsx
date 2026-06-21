@@ -4,7 +4,8 @@ import { useMemo, useState } from 'react';
 import { AlertTriangle, Download, FileJson, Plus, Search, Trash2 } from 'lucide-react';
 import type { CollectionRecord, CollectionStatus } from '@/lib/collections/types';
 import type { ViewAsContext } from '@/lib/dashboard/view-as';
-import { collectionBucket, computedCollectionStatus, daysUntil, formatGbp, outstandingBalance } from '@/lib/collections/format';
+import { computedCollectionStatus, daysUntil, formatGbp, outstandingBalance } from '@/lib/collections/format';
+import { buildCollectionSummary, filterCollectionPipeline, shouldShowCollectedForStatusFilter } from '@/lib/collections/pipeline';
 
 type RepOption = { id: string; name: string; email?: string; role?: string; sales_role?: string | null };
 
@@ -50,31 +51,26 @@ export default function CollectionsClient({
   const [riskFilter, setRiskFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [ownerFilter, setOwnerFilter] = useState('');
+  const [showCollected, setShowCollected] = useState(false);
   const [message, setMessage] = useState('');
   const isViewingAs = Boolean(viewAsContext?.isViewingAs);
   const canManageCollections = !isViewingAs;
   const canUseAdminActions = isAdmin && !isViewingAs;
 
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return collections.filter((record) => {
-      const status = computedCollectionStatus(record);
-      const hay = [record.client_name, record.telegram, record.phone_number, record.owner_name, record.collection_type, record.notes].join(' ').toLowerCase();
-      return (!q || hay.includes(q))
-        && (!statusFilter || status === statusFilter)
-        && (!riskFilter || record.risk === riskFilter)
-        && (!typeFilter || collectionBucket(record.collection_type) === typeFilter)
-        && (!ownerFilter || record.owner_user_id === ownerFilter);
-    }).sort((a, b) => outstandingBalance(b) - outstandingBalance(a));
-  }, [collections, query, statusFilter, riskFilter, typeFilter, ownerFilter]);
+    return filterCollectionPipeline(collections, { query, statusFilter, riskFilter, typeFilter, ownerFilter, showCollected });
+  }, [collections, query, statusFilter, riskFilter, typeFilter, ownerFilter, showCollected]);
 
-  const active = visible.filter((record) => !['Collected', 'Cancelled'].includes(computedCollectionStatus(record)));
-  const overdue = active.filter((record) => computedCollectionStatus(record) === 'Overdue');
-  const due7 = active.filter((record) => {
-    const d = daysUntil(record.balance_due_date);
-    return d !== null && d >= 0 && d <= 7;
-  });
-  const collected = visible.reduce((sum, record) => sum + Number(record.amount_paid || 0), 0);
+  const summary = useMemo(() => buildCollectionSummary(visible), [visible]);
+  const active = summary.activeRecords;
+  const overdue = summary.overdueRecords;
+  const due7 = summary.dueNextSevenDaysRecords;
+  const effectiveShowCollected = shouldShowCollectedForStatusFilter(statusFilter, showCollected);
+
+  function handleStatusFilter(value: string) {
+    setStatusFilter(value);
+    if (value === 'Collected') setShowCollected(true);
+  }
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -145,7 +141,10 @@ export default function CollectionsClient({
       body: JSON.stringify({ amount_paid: record.total_sale_value || 0, status: 'Collected' }),
     });
     const body = await res.json();
-    if (res.ok) setCollections((current) => current.map((item) => item.id === record.id ? body.collection : item));
+    if (res.ok) {
+      setCollections((current) => current.map((item) => item.id === record.id ? body.collection : item));
+      setMessage('Collection marked as collected. Turn on Show collected to view completed records.');
+    }
     else setMessage(body.error || 'Could not mark collected');
   }
 
@@ -189,11 +188,12 @@ export default function CollectionsClient({
     {message && <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">{message}</div>}
 
     <div className="grid gap-4 md:grid-cols-4">
-      <Metric label="Outstanding balance" value={formatGbp(active.reduce((s, x) => s + outstandingBalance(x), 0))} sub={`${active.length} active balances`} />
-      <Metric label="Overdue balance" value={formatGbp(overdue.reduce((s, x) => s + outstandingBalance(x), 0))} sub={`${overdue.length} overdue clients`} danger />
-      <Metric label="Due next 7 days" value={formatGbp(due7.reduce((s, x) => s + outstandingBalance(x), 0))} sub={`${due7.length} to chase`} warning />
-      <Metric label="Deposits collected" value={formatGbp(collected)} sub={`${visible.length} visible records`} success />
+      <Metric label="Outstanding balance" value={formatGbp(summary.outstandingBalance)} sub={`${summary.activeCount} active balances`} />
+      <Metric label="Overdue balance" value={formatGbp(summary.overdueBalance)} sub={`${overdue.length} overdue clients`} danger />
+      <Metric label="Due next 7 days" value={formatGbp(summary.dueNextSevenDaysBalance)} sub={`${due7.length} to chase`} warning />
+      <Metric label="Deposits collected" value={formatGbp(summary.depositsCollected)} sub={`Active visible records only`} success />
     </div>
+    {effectiveShowCollected && <p className="text-xs text-zinc-500">Summary cards still show active, uncollected collection work only. Completed records are included in the table because Show collected is on.</p>}
 
     {canManageCollections ? <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -221,15 +221,19 @@ export default function CollectionsClient({
     <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Collection pipeline</h2><p className="text-sm text-zinc-500">Server-filtered records for your role.</p></div>
-        {canUseAdminActions && <div className="flex flex-wrap gap-2"><button onClick={exportBackup} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"><FileJson className="h-4 w-4" />Export backup</button><button onClick={exportCsv} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"><Download className="h-4 w-4" />Export CSV</button><label className="cursor-pointer rounded-lg border px-3 py-2 text-sm">Import backup<input type="file" accept="application/json" className="hidden" onChange={(e) => importBackup(e.target.files?.[0])} /></label><button onClick={clearAll} className="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm text-red-600"><Trash2 className="h-4 w-4" />Clear all</button></div>}
+        {canUseAdminActions && <div className="flex flex-wrap gap-2"><button onClick={exportBackup} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"><FileJson className="h-4 w-4" />Export all backup</button><button onClick={exportCsv} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"><Download className="h-4 w-4" />Export all CSV</button><label className="cursor-pointer rounded-lg border px-3 py-2 text-sm">Import backup<input type="file" accept="application/json" className="hidden" onChange={(e) => importBackup(e.target.files?.[0])} /></label><button onClick={clearAll} className="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm text-red-600"><Trash2 className="h-4 w-4" />Clear all</button></div>}
       </div>
 
       <div className="mb-4 grid gap-3 md:grid-cols-6">
         <div className="relative md:col-span-2"><Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search client, closer, owner, notes" className="w-full rounded-lg border border-zinc-200 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-950" /></div>
         <Filter value={typeFilter} onChange={setTypeFilter} options={[['deposit','Deposits / balances'],['plan','Payment plans'],['other','Other']]} placeholder="All types" />
-        <Filter value={statusFilter} onChange={setStatusFilter} options={['Open','Due Soon','Overdue','Collected','Failed Payment','Refund Risk','Cancelled'].map((x) => [x, x])} placeholder="All statuses" />
+        <Filter value={statusFilter} onChange={handleStatusFilter} options={['Open','Due Soon','Overdue','Collected','Failed Payment','Refund Risk','Cancelled'].map((x) => [x, x])} placeholder="All statuses" />
         <Filter value={riskFilter} onChange={setRiskFilter} options={['Low','Medium','High'].map((x) => [x, x])} placeholder="All risks" />
         {canUseAdminActions && <Filter value={ownerFilter} onChange={setOwnerFilter} options={reps.map((r) => [r.id, r.name])} placeholder="All owners" />}
+        <label className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200">
+          <input type="checkbox" checked={effectiveShowCollected} onChange={(e) => setShowCollected(e.target.checked)} className="h-4 w-4" />
+          Show collected
+        </label>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800"><table className="min-w-[1200px] w-full text-left text-sm"><thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-950"><tr><th className="p-3">Client</th><th className="p-3">Owner</th><th className="p-3">Payment</th><th className="p-3">Paid</th><th className="p-3">Outstanding</th><th className="p-3">Due</th><th className="p-3">Follow up</th><th className="p-3">Status</th><th className="p-3">Risk</th><th className="p-3">Notes</th>{canManageCollections && <th className="p-3">Actions</th>}</tr></thead><tbody>{visible.map((record) => <tr key={record.id} className="border-t border-zinc-100 dark:border-zinc-800"><td className="p-3 font-medium">{record.client_name}<div className="text-xs font-normal text-zinc-500">{record.telegram || record.phone_number || 'No contact'}</div></td><td className="p-3">{record.owner_name || 'Unassigned'}</td><td className="p-3">{record.collection_type}</td><td className="p-3 font-semibold">{formatGbp(record.amount_paid)}</td><td className="p-3 font-semibold">{formatGbp(outstandingBalance(record))}</td><td className="p-3">{record.balance_due_date || '—'}</td><td className="p-3">{record.next_follow_up_date || '—'}</td><td className="p-3"><StatusPill status={computedCollectionStatus(record)} /></td><td className="p-3">{record.risk}</td><td className="p-3 max-w-xs truncate">{record.notes}{record.payment_link && <a className="ml-2 text-indigo-600" href={record.payment_link} target="_blank">Link</a>}</td>{canManageCollections && <td className="p-3"><div className="flex gap-2"><button onClick={() => edit(record)} className="rounded border px-2 py-1 text-xs">Edit</button><button onClick={() => markCollected(record)} className="rounded border px-2 py-1 text-xs">Collected</button><button onClick={() => remove(record.id)} className="rounded border border-red-200 px-2 py-1 text-xs text-red-600">Delete</button></div></td>}</tr>)}</tbody></table>{visible.length === 0 && <div className="p-6 text-sm text-zinc-500">No collections match your filters.</div>}</div>

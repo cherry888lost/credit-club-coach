@@ -5,10 +5,14 @@ const shellPath = 'app/dashboard/_components/DashboardShell.tsx';
 const pagePath = 'app/dashboard/collections/page.tsx';
 const clientPath = 'app/dashboard/collections/CollectionsClient.tsx';
 const apiPath = 'app/api/collections/route.ts';
+const exportApiPath = 'app/api/collections/export/route.ts';
+const dataPath = 'lib/collections/data.ts';
 const shellSource = readFileSync(shellPath, 'utf8');
 const pageSource = existsSync(pagePath) ? readFileSync(pagePath, 'utf8') : '';
 const clientSource = existsSync(clientPath) ? readFileSync(clientPath, 'utf8') : '';
 const apiSource = existsSync(apiPath) ? readFileSync(apiPath, 'utf8') : '';
+const exportApiSource = existsSync(exportApiPath) ? readFileSync(exportApiPath, 'utf8') : '';
+const dataSource = existsSync(dataPath) ? readFileSync(dataPath, 'utf8') : '';
 
 describe('collections dashboard route and sidebar', () => {
   it('adds Collections to the dashboard sidebar after Settings', () => {
@@ -44,6 +48,40 @@ describe('collections dashboard route and sidebar', () => {
   it('remounts CollectionsClient when view_as changes so stale admin records are not retained', () => {
     expect(pageSource).toContain("key={viewAsContext.requestedViewAsRepId || 'admin-view'}");
     expect(clientSource).toContain("useState(initialCollections)");
+  });
+
+  it('hides collected rows by default but exposes a Show collected toggle', () => {
+    expect(clientSource).toContain('showCollected');
+    expect(clientSource).toContain('filterCollectionPipeline');
+    expect(clientSource).toContain('Show collected');
+    expect(clientSource).toContain('checked={effectiveShowCollected}');
+  });
+
+  it('makes Collected status filter explicit instead of returning an empty hidden state', () => {
+    expect(clientSource).toContain('handleStatusFilter');
+    expect(clientSource).toContain("if (value === 'Collected') setShowCollected(true)");
+    expect(clientSource).toContain('shouldShowCollectedForStatusFilter');
+  });
+
+  it('keeps summary cards focused on active uncollected money', () => {
+    expect(clientSource).toContain('buildCollectionSummary');
+    expect(clientSource).toContain('summary.outstandingBalance');
+    expect(clientSource).toContain('Summary cards still show active, uncollected collection work only');
+  });
+
+  it('marks records collected without deleting them and explains where to find them', () => {
+    expect(clientSource).toContain("status: 'Collected'");
+    expect(clientSource).toContain('amount_paid: record.total_sale_value');
+    expect(clientSource).toContain('Collection marked as collected. Turn on Show collected to view completed records.');
+    expect(clientSource).toContain('current.map((item) => item.id === record.id ? body.collection : item)');
+  });
+
+  it('keeps admin exports as all permitted records instead of visible-row exports', () => {
+    expect(clientSource).toContain('Export all backup');
+    expect(clientSource).toContain('Export all CSV');
+    expect(exportApiSource).toContain('exportCollections()');
+    expect(dataSource).toContain('return { data: { collections: await listCollections() } }');
+    expect(dataSource).not.toContain("neq('status', 'Collected')");
   });
 
   it('adds admin-only View As controls to the dashboard shell', () => {
