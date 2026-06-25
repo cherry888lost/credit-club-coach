@@ -25,6 +25,16 @@ const learningPageSource = readFileSync(learningPagePath, 'utf8');
 const patternsPageSource = readFileSync(patternsPagePath, 'utf8');
 const settingsPageSource = readFileSync(settingsPagePath, 'utf8');
 
+const navigationItems = Array.from(
+  shellSource.matchAll(/\{ name: "([^"]+)", href: "([^"]+)", icon: [^,]+, adminOnly: (true|false) \}/g),
+).map((match) => ({ name: match[1], href: match[2], adminOnly: match[3] === 'true' }));
+
+function visibleSidebarNames(isAdmin: boolean) {
+  return navigationItems
+    .filter((item) => !item.adminOnly || isAdmin)
+    .map((item) => item.name);
+}
+
 describe('dashboard sidebar soft-hide for stale learning surfaces', () => {
   it('keeps Analysis and Collections in the dashboard sidebar', () => {
     expect(shellSource).toContain('Analysis');
@@ -51,6 +61,27 @@ describe('settings dashboard permissions', () => {
     expect(shellSource).toContain('{ name: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: true }');
     expect(shellSource).toContain('{ name: "Collections", href: "/dashboard/collections", icon: WalletCards, adminOnly: false }');
     expect(shellSource).toContain('.filter((item) => !item.adminOnly || isAdminUser)');
+  });
+
+  it('shows the expected admin sidebar including Collections', () => {
+    expect(visibleSidebarNames(true)).toEqual([
+      'Overview',
+      'Calls',
+      'Reps',
+      'Analysis',
+      'Import Calls',
+      'Settings',
+      'Collections',
+    ]);
+  });
+
+  it.each(['closer', 'SDR', 'setter'])('shows Collections but not admin-only items for %s sidebar users', () => {
+    expect(visibleSidebarNames(false)).toEqual(['Overview', 'Calls', 'Reps', 'Collections']);
+    expect(visibleSidebarNames(false)).not.toContain('Settings');
+    expect(visibleSidebarNames(false)).not.toContain('Analysis');
+    expect(visibleSidebarNames(false)).not.toContain('Import Calls');
+    expect(visibleSidebarNames(false)).not.toContain('Learning Queue');
+    expect(visibleSidebarNames(false)).not.toContain('Pattern Library');
   });
 
   it('protects direct Settings access server-side for authenticated non-admins', () => {

@@ -14,17 +14,19 @@ const admin: CollectionsUserContext = { repId: 'admin-1', isAdmin: true };
 const closerA: CollectionsUserContext = { repId: 'closer-a', isAdmin: false };
 const closerB: CollectionsUserContext = { repId: 'closer-b', isAdmin: false };
 const sdrA: CollectionsUserContext = { repId: 'sdr-a', isAdmin: false };
+const setterA: CollectionsUserContext = { repId: 'setter-a', isAdmin: false };
 
 const records: CollectionRecord[] = [
   { id: 'a', owner_user_id: 'closer-a' },
   { id: 'b', owner_user_id: 'closer-b' },
   { id: 'c', owner_user_id: 'sdr-a' },
+  { id: 'setter', owner_user_id: 'setter-a' },
   { id: 'unassigned', owner_user_id: null },
 ];
 
 describe('collections permission model', () => {
   it('allows admins to see all collections', () => {
-    expect(filterCollectionsForUser(records, admin).map((r) => r.id)).toEqual(['a', 'b', 'c', 'unassigned']);
+    expect(filterCollectionsForUser(records, admin).map((r) => r.id)).toEqual(['a', 'b', 'c', 'setter', 'unassigned']);
   });
 
   it('allows non-admins to see only records where owner_user_id equals their rep id', () => {
@@ -38,6 +40,12 @@ describe('collections permission model', () => {
 
   it('allows SDRs to see their owned collections', () => {
     expect(filterCollectionsForUser(records, sdrA).map((r) => r.id)).toEqual(['c']);
+  });
+
+  it('allows any active non-admin rep context with a valid rep id to see owned collections without role-string checks', () => {
+    expect(filterCollectionsForUser(records, setterA).map((r) => r.id)).toEqual(['setter']);
+    expect(canAccessCollection(records[3], setterA)).toBe(true);
+    expect(canAccessCollection(records[0], setterA)).toBe(false);
   });
 
   it('blocks non-admin access to another user collection even if the request input changes', () => {
