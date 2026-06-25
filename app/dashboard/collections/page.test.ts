@@ -5,12 +5,14 @@ const shellPath = 'app/dashboard/_components/DashboardShell.tsx';
 const pagePath = 'app/dashboard/collections/page.tsx';
 const clientPath = 'app/dashboard/collections/CollectionsClient.tsx';
 const apiPath = 'app/api/collections/route.ts';
+const collectionByIdApiPath = 'app/api/collections/[id]/route.ts';
 const exportApiPath = 'app/api/collections/export/route.ts';
 const dataPath = 'lib/collections/data.ts';
 const shellSource = readFileSync(shellPath, 'utf8');
 const pageSource = existsSync(pagePath) ? readFileSync(pagePath, 'utf8') : '';
 const clientSource = existsSync(clientPath) ? readFileSync(clientPath, 'utf8') : '';
 const apiSource = existsSync(apiPath) ? readFileSync(apiPath, 'utf8') : '';
+const collectionByIdApiSource = existsSync(collectionByIdApiPath) ? readFileSync(collectionByIdApiPath, 'utf8') : '';
 const exportApiSource = existsSync(exportApiPath) ? readFileSync(exportApiPath, 'utf8') : '';
 const dataSource = existsSync(dataPath) ? readFileSync(dataPath, 'utf8') : '';
 
@@ -28,6 +30,13 @@ describe('collections dashboard route and sidebar', () => {
     expect(pageSource).not.toMatch(/iframe|script\.google|google\.script|Apps Script/i);
   });
 
+  it.each(['admin', 'closer', 'SDR'])('allows %s users through normal dashboard auth instead of an admin-only page guard', () => {
+    expect(pageSource).toContain('requireAuth');
+    expect(pageSource).not.toContain('requireAdmin');
+    expect(pageSource).not.toContain('getCurrentUserWithRole');
+    expect(pageSource).not.toContain('redirect("/dashboard")');
+  });
+
   it('wires Collections through server-validated view_as context', () => {
     expect(pageSource).toContain('searchParams');
     expect(pageSource).toContain('resolveViewAsContextFromRequest');
@@ -35,6 +44,14 @@ describe('collections dashboard route and sidebar', () => {
     expect(pageSource).toContain('listCollections({ viewAsContext })');
     expect(pageSource).toContain("key={viewAsContext.requestedViewAsRepId || 'admin-view'}");
     expect(apiSource).toContain("request.nextUrl.searchParams.get('view_as')");
+  });
+
+  it('keeps non-admin list and direct-record API access server-filtered to owner_user_id', () => {
+    expect(dataSource).toContain('if (!context.isAdmin || context.isViewingAs)');
+    expect(dataSource).toContain("query = query.eq('owner_user_id', context.repId)");
+    expect(dataSource).toContain('canAccessCollection(collection, context)');
+    expect(collectionByIdApiSource).toContain('getCollectionById(id, { viewAsContext })');
+    expect(dataSource).not.toContain("query = query.eq('status'");
   });
 
   it('renders read-only preview UI when admin is viewing as another user', () => {
