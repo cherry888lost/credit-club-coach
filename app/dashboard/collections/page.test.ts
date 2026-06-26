@@ -80,6 +80,22 @@ describe('collections dashboard route and sidebar', () => {
     expect(clientSource).toContain('shouldShowCollectedForStatusFilter');
   });
 
+  it('shows a Date added filter with presets and custom range controls', () => {
+    expect(clientSource).toContain('Date added');
+    expect(clientSource).toContain('All time');
+    expect(clientSource).toContain('Today');
+    expect(clientSource).toContain('Yesterday');
+    expect(clientSource).toContain('Last 7 days');
+    expect(clientSource).toContain('Last 30 days');
+    expect(clientSource).toContain('This month');
+    expect(clientSource).toContain('Custom range');
+    expect(clientSource).toContain('From date');
+    expect(clientSource).toContain('To date');
+    expect(clientSource).toContain('dateAddedFilter');
+    expect(clientSource).toContain('dateAddedFrom');
+    expect(clientSource).toContain('dateAddedTo');
+  });
+
   it('keeps summary cards focused on active uncollected money', () => {
     expect(clientSource).toContain('buildCollectionSummary');
     expect(clientSource).toContain('summary.outstandingBalance');
